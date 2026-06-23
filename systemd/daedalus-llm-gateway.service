@@ -1,0 +1,22 @@
+[Unit]
+Description=Daedalus LLM Gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/daedalus-llm-gateway
+EnvironmentFile=/etc/daedalus-llm-gateway.env
+ExecStart=/usr/bin/node src/index.js
+Restart=always
+RestartSec=5
+User=daedalus
+Group=daedalus
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
+

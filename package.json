@@ -1,0 +1,24 @@
+{
+  "name": "daedalus-llm-gateway",
+  "version": "1.0.0",
+  "description": "Fastify API gateway for private Ollama access on the Daedalus network.",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "test": "node --test"
+  },
+  "keywords": [
+    "fastify",
+    "ollama",
+    "llm",
+    "gateway"
+  ],
+  "author": "",
+  "license": "UNLICENSED",
+  "type": "commonjs",
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "fastify": "^5.8.5"
+  }
+}
