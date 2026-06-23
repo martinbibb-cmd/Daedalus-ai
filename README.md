@@ -1,4 +1,6 @@
-# daedalus-llm-gateway
+# Daedalus-ai
+
+## daedalus-llm-gateway
 
 Fastify API gateway for private Ollama access on the Daedalus network.
 
