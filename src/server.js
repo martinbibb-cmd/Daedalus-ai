@@ -1,6 +1,22 @@
 const Fastify = require('fastify');
 const { extractJsonObject, generate, listModels } = require('./ollama');
 
+function sanitizeDiagnosticError(error, config) {
+  let message = error && error.message ? error.message : 'Ollama self-test failed';
+
+  const redactions = [
+    config.apiKey,
+    config.ollamaBaseUrl,
+    'api.openai.com',
+  ].filter(Boolean);
+
+  for (const value of redactions) {
+    message = message.split(value).join('[redacted]');
+  }
+
+  return message.replace(/:11434\b/g, ':[redacted]');
+}
+
 function buildServer({ config, fetchImpl = fetch, logger = true }) {
   const app = Fastify({ logger });
 
@@ -22,6 +38,41 @@ function buildServer({ config, fetchImpl = fetch, logger = true }) {
   }));
 
   app.get('/models', async () => listModels({ config, fetchImpl }));
+
+  app.get('/v1/self-test', async (request, reply) => {
+    try {
+      const result = await generate({
+        config,
+        fetchImpl,
+        prompt: 'Reply with this exact sentence and nothing else: Daedalus LLM is working.',
+        system: 'You are a concise diagnostic check.',
+        options: {
+          temperature: 0,
+        },
+      });
+
+      const sample = String(result.response || '').trim();
+      if (!sample) {
+        throw new Error('Ollama returned an empty response');
+      }
+
+      return {
+        ok: true,
+        gateway: 'daedalus-llm-gateway',
+        ollamaReachable: true,
+        model: result.model || config.defaultModel,
+        generated: true,
+        sample,
+      };
+    } catch (error) {
+      return reply.code(502).send({
+        ok: false,
+        ollamaReachable: false,
+        model: config.defaultModel,
+        error: sanitizeDiagnosticError(error, config),
+      });
+    }
+  });
 
   app.post('/v1/json', async (request, reply) => {
     const body = request.body || {};
@@ -121,4 +172,3 @@ function buildServer({ config, fetchImpl = fetch, logger = true }) {
 }
 
 module.exports = { buildServer };
-

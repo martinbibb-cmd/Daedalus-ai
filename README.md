@@ -73,6 +73,15 @@ curl http://127.0.0.1:8787/models \
   -H "x-daedalus-api-key: $DAEDALUS_LLM_API_KEY"
 ```
 
+### GET /v1/self-test
+
+Protected diagnostic check that asks the configured Ollama backend to generate through `DEFAULT_MODEL`.
+
+```bash
+curl http://127.0.0.1:8787/v1/self-test \
+  -H "x-daedalus-api-key: $DAEDALUS_LLM_API_KEY"
+```
+
 ### POST /v1/json
 
 ```bash

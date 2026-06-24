@@ -48,6 +48,92 @@ test('models proxies Ollama tags', async () => {
   assert.equal(response.json().models[0].name, 'llama3.2:3b');
 });
 
+test('self-test requires x-daedalus-api-key', async () => {
+  const app = buildServer({ config, logger: false });
+  const response = await app.inject({ method: 'GET', url: '/v1/self-test' });
+
+  assert.equal(response.statusCode, 401);
+});
+
+test('self-test calls configured Ollama URL using default model', async () => {
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    calls.push({ url, init });
+    assert.equal(url, 'http://ollama.test/api/generate');
+    const body = JSON.parse(init.body);
+    assert.equal(body.model, 'llama3.2:3b');
+    assert.equal(body.stream, false);
+    assert.match(body.prompt, /Daedalus LLM is working/);
+    return jsonResponse({ model: body.model, response: 'Daedalus LLM is working.' });
+  };
+  const app = buildServer({ config, fetchImpl, logger: false });
+
+  const response = await app.inject({
+    method: 'GET',
+    url: '/v1/self-test',
+    headers: { 'x-daedalus-api-key': 'test-secret' },
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(response.json(), {
+    ok: true,
+    gateway: 'daedalus-llm-gateway',
+    ollamaReachable: true,
+    model: 'llama3.2:3b',
+    generated: true,
+    sample: 'Daedalus LLM is working.',
+  });
+  assert.equal(calls.length, 1);
+});
+
+test('self-test does not return secrets or public Ollama instructions on failure', async () => {
+  const privateConfig = {
+    ...config,
+    ollamaBaseUrl: 'http://127.0.0.1:11434',
+  };
+  const fetchImpl = async () => {
+    throw new Error('connect ECONNREFUSED http://127.0.0.1:11434 with test-secret');
+  };
+  const app = buildServer({ config: privateConfig, fetchImpl, logger: false });
+
+  const response = await app.inject({
+    method: 'GET',
+    url: '/v1/self-test',
+    headers: { 'x-daedalus-api-key': 'test-secret' },
+  });
+
+  assert.equal(response.statusCode, 502);
+  const body = response.json();
+  assert.equal(body.ok, false);
+  assert.equal(body.ollamaReachable, false);
+  assert.equal(body.model, 'llama3.2:3b');
+
+  const serialized = JSON.stringify(body);
+  assert.equal(serialized.includes('test-secret'), false);
+  assert.equal(serialized.includes('DAEDALUS_LLM_API_KEY'), false);
+  assert.equal(serialized.includes(':11434'), false);
+});
+
+test('self-test does not call api.openai.com', async () => {
+  const urls = [];
+  const fetchImpl = async (url, init) => {
+    urls.push(url);
+    assert.equal(String(url).includes('api.openai.com'), false);
+    const body = JSON.parse(init.body);
+    return jsonResponse({ model: body.model, response: 'Daedalus LLM is working.' });
+  };
+  const app = buildServer({ config, fetchImpl, logger: false });
+
+  const response = await app.inject({
+    method: 'GET',
+    url: '/v1/self-test',
+    headers: { 'x-daedalus-api-key': 'test-secret' },
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(urls, ['http://ollama.test/api/generate']);
+});
+
 test('json route returns parsed model JSON', async () => {
   const fetchImpl = async (url, init) => {
     assert.equal(url, 'http://ollama.test/api/generate');
@@ -69,4 +155,3 @@ test('json route returns parsed model JSON', async () => {
   assert.equal(response.statusCode, 200);
   assert.deepEqual(response.json().json, { answer: 42 });
 });
-
