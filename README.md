@@ -54,6 +54,14 @@ npm install
 npm run deploy
 ```
 
+On the Daedalus VM, you can use the checked-in helper to discard local drift, deploy the latest `main`, and print the live Worker health response:
+
+```bash
+bash scripts/deploy-petllama-from-vm.sh
+```
+
+Avoid exposing this as a public chat command. If an automated admin endpoint is needed later, protect it with a separate admin-only secret and fixed allowlisted actions.
+
 ## Configuration
 
 Create `.env`:

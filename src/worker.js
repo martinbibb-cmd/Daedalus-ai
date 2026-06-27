@@ -1,4 +1,4 @@
-const APP_VERSION = "petllama-worker-2026-06-27-mode-bench";
+const APP_VERSION = "petllama-worker-2026-06-27-mobile-chat";
 
 const MODES = new Set([
   "chat",
@@ -23,35 +23,88 @@ const CHAT_PAGE = `<!doctype html>
 
     body {
       margin: 0;
-      min-height: 100vh;
-      display: grid;
-      place-items: center;
+      min-height: 100dvh;
       background: #f4f5f7;
       color: #1f2933;
     }
 
     main {
-      width: min(760px, calc(100vw - 32px));
-      display: grid;
-      gap: 16px;
+      width: min(820px, 100vw);
+      height: 100dvh;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      background: #f4f5f7;
     }
 
     h1 {
       margin: 0;
-      font-size: 28px;
+      padding: 18px 18px 12px;
+      font-size: 26px;
       font-weight: 700;
       letter-spacing: 0;
     }
 
-    form {
-      display: grid;
+    .chat-history {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      padding: 10px 18px 18px;
+      display: flex;
+      flex-direction: column;
       gap: 12px;
+      scroll-behavior: smooth;
+    }
+
+    .message {
+      max-width: min(88%, 640px);
+      padding: 12px 14px;
+      border: 1px solid #d8dde6;
+      border-radius: 8px;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      background: #ffffff;
+    }
+
+    .message.user {
+      align-self: flex-end;
+      background: #146c5c;
+      border-color: #146c5c;
+      color: #ffffff;
+    }
+
+    .message.bot {
+      align-self: flex-start;
+    }
+
+    .message.error {
+      border-color: #c2410c;
+      color: #9a3412;
+    }
+
+    form {
+      display: flex;
+      align-items: end;
+      gap: 12px;
+      padding: 12px 18px calc(12px + env(safe-area-inset-bottom));
+      border-top: 1px solid #d8dde6;
+      background: #ffffff;
     }
 
     label {
       display: grid;
       gap: 6px;
       font-weight: 650;
+    }
+
+    .mode-field {
+      width: 150px;
+      flex: 0 0 150px;
+    }
+
+    .message-field {
+      flex: 1;
+      min-width: 0;
     }
 
     select,
@@ -67,7 +120,8 @@ const CHAT_PAGE = `<!doctype html>
     }
 
     textarea {
-      min-height: 150px;
+      min-height: 46px;
+      max-height: 140px;
       resize: vertical;
     }
 
@@ -89,30 +143,28 @@ const CHAT_PAGE = `<!doctype html>
       opacity: 0.65;
     }
 
-    output {
-      min-height: 150px;
-      white-space: pre-wrap;
-      overflow-wrap: anywhere;
-      padding: 14px;
-      border: 1px solid #d8dde6;
-      border-radius: 8px;
-      background: #ffffff;
-    }
-
-    .error {
-      border-color: #c2410c;
-      color: #9a3412;
-    }
-
     @media (prefers-color-scheme: dark) {
       body {
         background: #121417;
         color: #edf2f7;
       }
 
+      main {
+        background: #121417;
+      }
+
+      form {
+        background: #171b21;
+        border-color: #384252;
+      }
+
       select,
-      textarea,
-      output {
+      textarea {
+        background: #1d2229;
+        border-color: #384252;
+      }
+
+      .message.bot {
         background: #1d2229;
         border-color: #384252;
       }
@@ -126,13 +178,32 @@ const CHAT_PAGE = `<!doctype html>
         color: #fdba74;
       }
     }
+
+    @media (max-width: 620px) {
+      form {
+        display: grid;
+        grid-template-columns: 1fr auto;
+      }
+
+      .mode-field {
+        grid-column: 1 / -1;
+        width: 100%;
+      }
+
+      .message-field {
+        min-width: 0;
+      }
+    }
   </style>
 </head>
 <body>
   <main>
     <h1>petllama</h1>
+    <section id="chat-history" class="chat-history" aria-live="polite">
+      <div class="message bot">petllama-worker-2026-06-27-mobile-chat</div>
+    </section>
     <form id="chat-form">
-      <label>
+      <label class="mode-field">
         Mode
         <select id="mode" name="mode">
           <option value="chat">Chat</option>
@@ -142,21 +213,36 @@ const CHAT_PAGE = `<!doctype html>
           <option value="self-test">Self-test</option>
         </select>
       </label>
-      <label>
+      <label class="message-field">
         Message
-        <textarea id="message" name="message" placeholder="Ask something, paste text, or run self-test..."></textarea>
+        <textarea id="message" name="message" placeholder="Type a message..." rows="1"></textarea>
       </label>
       <button id="send" type="submit">Send</button>
     </form>
-    <output id="response" aria-live="polite">petllama-worker-2026-06-27-mode-bench</output>
   </main>
 
   <script>
     const form = document.getElementById("chat-form");
+    const history = document.getElementById("chat-history");
     const mode = document.getElementById("mode");
     const message = document.getElementById("message");
-    const response = document.getElementById("response");
     const send = document.getElementById("send");
+
+    function appendMessage(kind, text) {
+      const bubble = document.createElement("div");
+      bubble.className = "message " + kind;
+      bubble.textContent = text;
+      history.appendChild(bubble);
+      history.scrollTop = history.scrollHeight;
+      return bubble;
+    }
+
+    message.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        form.requestSubmit();
+      }
+    });
 
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
@@ -164,14 +250,14 @@ const CHAT_PAGE = `<!doctype html>
       const prompt = message.value.trim();
 
       if (selectedMode !== "self-test" && !prompt) {
-        response.classList.add("error");
-        response.textContent = "Enter a message for this mode.";
+        appendMessage("error", "Enter a message for this mode.");
         return;
       }
 
       send.disabled = true;
-      response.classList.remove("error");
-      response.textContent = "Thinking...";
+      if (prompt) appendMessage("user", prompt);
+      message.value = "";
+      const pending = appendMessage("bot", "Thinking...");
 
       try {
         const result = await fetch("/chat", {
@@ -185,12 +271,14 @@ const CHAT_PAGE = `<!doctype html>
           throw new Error(data.error || "Request failed");
         }
 
-        response.textContent = data.response || JSON.stringify(data, null, 2);
+        pending.textContent = data.response || JSON.stringify(data, null, 2);
       } catch (error) {
-        response.classList.add("error");
-        response.textContent = error.message || "Unable to reach the chat service.";
+        pending.classList.add("error");
+        pending.textContent = error.message || "Unable to reach the chat service.";
       } finally {
         send.disabled = false;
+        message.focus();
+        history.scrollTop = history.scrollHeight;
       }
     });
   </script>
