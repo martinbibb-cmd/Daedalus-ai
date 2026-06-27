@@ -6,7 +6,9 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
-    "test": "node --test"
+    "test": "node --test",
+    "deploy": "wrangler deploy --config ./wrangler.toml",
+    "worker:dev": "wrangler dev --config ./wrangler.toml"
   },
   "keywords": [
     "fastify",
@@ -20,5 +22,8 @@
   "dependencies": {
     "dotenv": "^17.4.2",
     "fastify": "^5.8.5"
+  },
+  "devDependencies": {
+    "wrangler": "4.105.0"
   }
 }
