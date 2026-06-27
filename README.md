@@ -6,6 +6,54 @@ Fastify API gateway for private Ollama access on the Daedalus network.
 
 Apps should call this gateway only. Do not expose raw Ollama publicly.
 
+## petllama Worker Test Bench
+
+`petllama` is a Cloudflare Worker UI for testing the Daedalus gateway from a browser without exposing gateway secrets.
+
+Architecture:
+
+```text
+Browser petllama UI
+  -> POST /chat on the petllama Worker
+  -> Daedalus LLM gateway at https://ai.atlas-phm.uk
+  -> private Ollama backend
+```
+
+The browser only calls the Worker:
+
+- `GET /` serves the test bench UI.
+- `GET /health` returns Worker version and non-secret configuration diagnostics.
+- `POST /chat` accepts the selected mode and message, then the Worker calls the private gateway.
+
+The Worker supports these modes:
+
+- Chat: calls `/v1/summarise` with conversational instruction wording.
+- Summarise: calls `/v1/summarise`.
+- JSON: calls `/v1/json` with a simple response schema.
+- Extract evidence: calls `/v1/extract-evidence`.
+- Self-test: calls `GET /v1/self-test`.
+
+Required Cloudflare secret:
+
+```bash
+npx wrangler secret put DAEDALUS_LLM_API_KEY
+```
+
+Do not commit `DAEDALUS_LLM_API_KEY` to the repo. Non-secret Worker vars are set in `wrangler.toml`:
+
+```toml
+DAEDALUS_LLM_GATEWAY_URL = "https://ai.atlas-phm.uk"
+DAEDALUS_LLM_MODEL = "llama3.2:3b"
+```
+
+Deploy flow:
+
+```bash
+git pull origin main
+npm install
+npm run deploy
+```
+
 ## Configuration
 
 Create `.env`:
