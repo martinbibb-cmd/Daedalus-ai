@@ -116,7 +116,7 @@ function buildServer({ config, fetchImpl = fetch, logger = true }) {
       config,
       fetchImpl,
       model: body.model,
-      system: 'You summarise text accurately and concisely.',
+      system: body.system || 'You summarise text accurately and concisely.',
       prompt: `${instruction}\n\nText:\n${body.text}`,
       options: {
         temperature: body.temperature ?? 0.2,

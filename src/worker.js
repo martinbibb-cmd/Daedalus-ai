@@ -343,11 +343,13 @@ function payloadForMode({ env, mode, message }) {
     return {
       model,
       text: message,
-      maxWords: 220,
+      maxWords: 120,
+      system: "You are petllama, a direct conversational assistant. You are not summarising text unless explicitly asked.",
       instruction: [
-        "Answer conversationally as a concise assistant.",
-        "Use the text below as the user's message.",
-        "Do not describe this as a summary unless the user asks for one.",
+        "Treat the text below as a chat message from the user.",
+        "Reply naturally and directly.",
+        "For greetings or small talk, respond like a normal assistant.",
+        "Do not say there is no text to summarise.",
       ].join(" "),
     };
   }
