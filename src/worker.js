@@ -1,10 +1,11 @@
-const APP_VERSION = "petllama-worker-2026-06-27-mobile-chat";
+const APP_VERSION = "petllama-v0.2-engineering-console";
+const DEFAULT_TIMEOUT_MS = 30000;
 
 const MODES = new Set([
   "chat",
   "summarise",
-  "json",
   "extract-evidence",
+  "json",
   "self-test",
 ]);
 
@@ -13,7 +14,7 @@ const CHAT_PAGE = `<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>petllama</title>
+  <title>Pet Llama</title>
   <style>
     :root {
       color-scheme: light dark;
@@ -24,71 +25,107 @@ const CHAT_PAGE = `<!doctype html>
     body {
       margin: 0;
       min-height: 100dvh;
-      background: #f4f5f7;
-      color: #1f2933;
+      background: #f3f5f7;
+      color: #17202a;
     }
 
     main {
-      width: min(820px, 100vw);
-      height: 100dvh;
+      width: min(1120px, 100vw);
+      min-height: 100dvh;
       margin: 0 auto;
+      display: grid;
+      grid-template-rows: auto auto 1fr;
+      background: #f3f5f7;
+    }
+
+    header {
       display: flex;
-      flex-direction: column;
-      background: #f4f5f7;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 18px;
+      border-bottom: 1px solid #d8dde6;
+      background: #ffffff;
     }
 
     h1 {
       margin: 0;
-      padding: 18px 18px 12px;
-      font-size: 26px;
-      font-weight: 700;
+      font-size: 24px;
+      font-weight: 750;
       letter-spacing: 0;
     }
 
-    .chat-history {
-      flex: 1;
-      min-height: 0;
-      overflow-y: auto;
-      padding: 10px 18px 18px;
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
-      scroll-behavior: smooth;
+    .version {
+      color: #627083;
+      font-size: 13px;
     }
 
-    .message {
-      max-width: min(88%, 640px);
-      padding: 12px 14px;
+    .health {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 8px;
+      padding: 12px 18px;
+      border-bottom: 1px solid #d8dde6;
+      background: #ffffff;
+    }
+
+    .health-item,
+    details,
+    .panel,
+    .control-bar {
       border: 1px solid #d8dde6;
       border-radius: 8px;
-      white-space: pre-wrap;
-      overflow-wrap: anywhere;
       background: #ffffff;
     }
 
-    .message.user {
-      align-self: flex-end;
-      background: #146c5c;
-      border-color: #146c5c;
-      color: #ffffff;
+    .health-item {
+      padding: 10px;
+      min-width: 0;
     }
 
-    .message.bot {
-      align-self: flex-start;
+    .health-label {
+      display: block;
+      color: #627083;
+      font-size: 12px;
     }
 
-    .message.error {
-      border-color: #c2410c;
-      color: #9a3412;
+    .health-value {
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-weight: 700;
     }
 
-    form {
-      display: flex;
-      align-items: end;
+    .ok {
+      color: #0f766e;
+    }
+
+    .bad {
+      color: #b42318;
+    }
+
+    .workspace {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 360px;
+      gap: 14px;
+      padding: 14px 18px 18px;
+    }
+
+    .primary,
+    .side {
+      min-height: 0;
+      display: grid;
+      gap: 14px;
+      align-content: start;
+    }
+
+    .control-bar {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
       gap: 12px;
-      padding: 12px 18px calc(12px + env(safe-area-inset-bottom));
-      border-top: 1px solid #d8dde6;
-      background: #ffffff;
+      padding: 14px;
     }
 
     label {
@@ -97,21 +134,16 @@ const CHAT_PAGE = `<!doctype html>
       font-weight: 650;
     }
 
-    .mode-field {
-      width: 150px;
-      flex: 0 0 150px;
-    }
-
-    .message-field {
-      flex: 1;
-      min-width: 0;
+    select,
+    textarea,
+    input[type="range"] {
+      width: 100%;
+      box-sizing: border-box;
     }
 
     select,
     textarea {
-      width: 100%;
-      box-sizing: border-box;
-      padding: 12px 14px;
+      padding: 10px 12px;
       border: 1px solid #c8ced8;
       border-radius: 8px;
       font: inherit;
@@ -120,13 +152,39 @@ const CHAT_PAGE = `<!doctype html>
     }
 
     textarea {
-      min-height: 46px;
-      max-height: 140px;
+      min-height: 190px;
       resize: vertical;
     }
 
+    .schema-box {
+      min-height: 110px;
+    }
+
+    .temp-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .panel {
+      padding: 14px;
+    }
+
+    .response {
+      min-height: 220px;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    .actions {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
     button {
-      justify-self: start;
       min-height: 42px;
       padding: 0 18px;
       border: 0;
@@ -134,8 +192,13 @@ const CHAT_PAGE = `<!doctype html>
       background: #146c5c;
       color: #ffffff;
       font: inherit;
-      font-weight: 650;
+      font-weight: 700;
       cursor: pointer;
+    }
+
+    button.secondary {
+      background: #e8edf2;
+      color: #17202a;
     }
 
     button:disabled {
@@ -143,144 +206,445 @@ const CHAT_PAGE = `<!doctype html>
       opacity: 0.65;
     }
 
+    details {
+      padding: 0;
+    }
+
+    summary {
+      cursor: pointer;
+      padding: 12px 14px;
+      font-weight: 750;
+    }
+
+    .details-body {
+      display: grid;
+      gap: 10px;
+      padding: 0 14px 14px;
+    }
+
+    .kv {
+      display: grid;
+      grid-template-columns: 130px minmax(0, 1fr);
+      gap: 8px;
+      font-size: 13px;
+    }
+
+    .kv span:first-child {
+      color: #627083;
+    }
+
+    pre {
+      margin: 0;
+      max-height: 260px;
+      overflow: auto;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      padding: 12px;
+      border-radius: 8px;
+      background: #f0f3f6;
+      font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    .trace {
+      display: grid;
+      gap: 8px;
+    }
+
+    .trace-step {
+      display: grid;
+      gap: 4px;
+      padding: 10px;
+      border: 1px solid #d8dde6;
+      border-radius: 8px;
+    }
+
+    .trace-arrow {
+      color: #627083;
+      text-align: center;
+    }
+
+    .error-text {
+      color: #b42318;
+    }
+
     @media (prefers-color-scheme: dark) {
-      body {
-        background: #121417;
+      body,
+      main {
+        background: #11161d;
         color: #edf2f7;
       }
 
-      main {
-        background: #121417;
-      }
-
-      form {
-        background: #171b21;
-        border-color: #384252;
-      }
-
+      header,
+      .health,
+      .health-item,
+      details,
+      .panel,
+      .control-bar,
       select,
       textarea {
-        background: #1d2229;
-        border-color: #384252;
+        background: #171d25;
+        border-color: #344052;
       }
 
-      .message.bot {
-        background: #1d2229;
-        border-color: #384252;
+      button.secondary {
+        background: #263241;
+        color: #edf2f7;
       }
 
-      button {
-        background: #20a486;
-      }
-
-      .error {
-        border-color: #f97316;
-        color: #fdba74;
+      pre {
+        background: #10151b;
       }
     }
 
-    @media (max-width: 620px) {
-      form {
-        display: grid;
-        grid-template-columns: 1fr auto;
+    @media (max-width: 860px) {
+      main {
+        grid-template-rows: auto auto auto;
       }
 
-      .mode-field {
-        grid-column: 1 / -1;
-        width: 100%;
+      header {
+        align-items: start;
+        flex-direction: column;
       }
 
-      .message-field {
-        min-width: 0;
+      .health,
+      .control-bar,
+      .workspace {
+        grid-template-columns: 1fr;
+      }
+
+      .workspace {
+        padding: 12px;
+      }
+
+      textarea {
+        min-height: 150px;
       }
     }
   </style>
 </head>
 <body>
   <main>
-    <h1>petllama</h1>
-    <section id="chat-history" class="chat-history" aria-live="polite">
-      <div class="message bot">petllama-worker-2026-06-27-mobile-chat</div>
+    <header>
+      <div>
+        <h1>Pet Llama v0.2</h1>
+        <div class="version">AI Gateway Engineering Console</div>
+      </div>
+      <button id="refresh-health" class="secondary" type="button">Refresh health</button>
+    </header>
+
+    <section class="health" aria-live="polite">
+      <div class="health-item"><span class="health-label">Gateway</span><span id="health-gateway" class="health-value">Checking...</span></div>
+      <div class="health-item"><span class="health-label">Tunnel</span><span id="health-tunnel" class="health-value">Checking...</span></div>
+      <div class="health-item"><span class="health-label">LLM</span><span id="health-llm" class="health-value">Checking...</span></div>
+      <div class="health-item"><span class="health-label">Model</span><span id="health-model" class="health-value">-</span></div>
+      <div class="health-item"><span class="health-label">Worker</span><span id="health-worker" class="health-value">${APP_VERSION}</span></div>
     </section>
-    <form id="chat-form">
-      <label class="mode-field">
-        Mode
-        <select id="mode" name="mode">
-          <option value="chat">Chat</option>
-          <option value="summarise">Summarise</option>
-          <option value="json">JSON</option>
-          <option value="extract-evidence">Extract evidence</option>
-          <option value="self-test">Self-test</option>
-        </select>
-      </label>
-      <label class="message-field">
-        Message
-        <textarea id="message" name="message" placeholder="Type a message..." rows="1"></textarea>
-      </label>
-      <button id="send" type="submit">Send</button>
-    </form>
+
+    <section class="workspace">
+      <div class="primary">
+        <section class="control-bar">
+          <label>
+            Mode
+            <select id="mode">
+              <option value="chat">Chat</option>
+              <option value="summarise">Summarise</option>
+              <option value="extract-evidence">Extract Evidence</option>
+              <option value="json">JSON</option>
+              <option value="self-test">Self Test</option>
+            </select>
+          </label>
+          <label>
+            Model
+            <select id="model">
+              <option value="">Loading models...</option>
+            </select>
+          </label>
+          <label>
+            Temperature
+            <span class="temp-row">
+              <input id="temperature" type="range" min="0" max="1.5" step="0.1" value="0.4">
+              <strong id="temperature-value">0.4</strong>
+            </span>
+          </label>
+          <div class="actions">
+            <button id="send" type="button">Send</button>
+            <button id="clear" class="secondary" type="button">Clear</button>
+          </div>
+        </section>
+
+        <label class="panel">
+          Prompt
+          <textarea id="prompt" placeholder="Enter prompt, source text, or diagnostic input..."></textarea>
+        </label>
+
+        <label id="schema-panel" class="panel" hidden>
+          Optional JSON schema
+          <textarea id="schema" class="schema-box" placeholder='{"answer":"string","confidence":"low|medium|high"}'></textarea>
+        </label>
+
+        <section class="panel">
+          <strong>Response</strong>
+          <div id="response" class="response">Ready.</div>
+        </section>
+      </div>
+
+      <aside class="side">
+        <details open>
+          <summary>Diagnostics</summary>
+          <div class="details-body">
+            <div class="kv"><span>Worker version</span><strong id="diag-worker">${APP_VERSION}</strong></div>
+            <div class="kv"><span>Gateway URL</span><strong id="diag-gateway">-</strong></div>
+            <div class="kv"><span>Selected model</span><strong id="diag-model">-</strong></div>
+            <div class="kv"><span>Mode</span><strong id="diag-mode">-</strong></div>
+            <div class="kv"><span>HTTP status</span><strong id="diag-status">-</strong></div>
+            <div class="kv"><span>Total request time</span><strong id="diag-total">-</strong></div>
+            <div class="kv"><span>Gateway time</span><strong id="diag-gateway-time">-</strong></div>
+          </div>
+        </details>
+
+        <details>
+          <summary>Trace</summary>
+          <div id="trace" class="details-body trace"></div>
+        </details>
+
+        <details>
+          <summary>Advanced</summary>
+          <div class="details-body">
+            <strong>Raw request JSON</strong>
+            <pre id="raw-request">{}</pre>
+            <strong>Raw response JSON</strong>
+            <pre id="raw-response">{}</pre>
+          </div>
+        </details>
+      </aside>
+    </section>
   </main>
 
   <script>
-    const form = document.getElementById("chat-form");
-    const history = document.getElementById("chat-history");
-    const mode = document.getElementById("mode");
-    const message = document.getElementById("message");
-    const send = document.getElementById("send");
+    const state = {
+      workerVersion: "${APP_VERSION}",
+      gatewayOrigin: "-",
+      defaultModel: "",
+      lastHealth: null
+    };
 
-    function appendMessage(kind, text) {
-      const bubble = document.createElement("div");
-      bubble.className = "message " + kind;
-      bubble.textContent = text;
-      history.appendChild(bubble);
-      history.scrollTop = history.scrollHeight;
-      return bubble;
+    const els = {
+      mode: document.getElementById("mode"),
+      model: document.getElementById("model"),
+      temperature: document.getElementById("temperature"),
+      temperatureValue: document.getElementById("temperature-value"),
+      prompt: document.getElementById("prompt"),
+      schemaPanel: document.getElementById("schema-panel"),
+      schema: document.getElementById("schema"),
+      send: document.getElementById("send"),
+      clear: document.getElementById("clear"),
+      response: document.getElementById("response"),
+      trace: document.getElementById("trace"),
+      rawRequest: document.getElementById("raw-request"),
+      rawResponse: document.getElementById("raw-response"),
+      diagGateway: document.getElementById("diag-gateway"),
+      diagModel: document.getElementById("diag-model"),
+      diagMode: document.getElementById("diag-mode"),
+      diagStatus: document.getElementById("diag-status"),
+      diagTotal: document.getElementById("diag-total"),
+      diagGatewayTime: document.getElementById("diag-gateway-time"),
+      healthGateway: document.getElementById("health-gateway"),
+      healthTunnel: document.getElementById("health-tunnel"),
+      healthLlm: document.getElementById("health-llm"),
+      healthModel: document.getElementById("health-model"),
+      healthWorker: document.getElementById("health-worker"),
+      refreshHealth: document.getElementById("refresh-health")
+    };
+
+    function setHealth(el, ok, text) {
+      el.className = "health-value " + (ok ? "ok" : "bad");
+      el.textContent = text;
     }
 
-    message.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" && !event.shiftKey) {
-        event.preventDefault();
-        form.requestSubmit();
+    function pretty(value) {
+      return JSON.stringify(value, null, 2);
+    }
+
+    function safeText(value) {
+      if (value === undefined || value === null || value === "") return "-";
+      return String(value);
+    }
+
+    function renderTrace(data) {
+      const trace = data && data.trace ? data.trace : [];
+      els.trace.textContent = "";
+      for (let i = 0; i < trace.length; i += 1) {
+        const step = trace[i];
+        const node = document.createElement("div");
+        node.className = "trace-step";
+        const meta = [
+          step.endpoint ? "endpoint: " + step.endpoint : "",
+          step.model ? "model: " + step.model : "",
+          step.status ? "status: " + step.status : "",
+          step.latencyMs !== undefined ? "latency: " + step.latencyMs + "ms" : ""
+        ].filter(Boolean).join(" | ");
+        node.textContent = step.name + (meta ? "\\n" + meta : "");
+        els.trace.appendChild(node);
+        if (i < trace.length - 1) {
+          const arrow = document.createElement("div");
+          arrow.className = "trace-arrow";
+          arrow.textContent = "↓";
+          els.trace.appendChild(arrow);
+        }
       }
-    });
+    }
 
-    form.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const selectedMode = mode.value;
-      const prompt = message.value.trim();
+    function updateDiagnostics(data) {
+      const diagnostics = data.diagnostics || {};
+      els.diagGateway.textContent = safeText(diagnostics.gatewayUrl || state.gatewayOrigin);
+      els.diagModel.textContent = safeText(diagnostics.selectedModel || els.model.value);
+      els.diagMode.textContent = safeText(diagnostics.mode || els.mode.value);
+      els.diagStatus.textContent = safeText(diagnostics.httpStatus);
+      els.diagTotal.textContent = diagnostics.totalMs !== undefined ? diagnostics.totalMs + "ms" : "-";
+      els.diagGatewayTime.textContent = diagnostics.gatewayMs !== undefined ? diagnostics.gatewayMs + "ms" : "-";
+    }
 
-      if (selectedMode !== "self-test" && !prompt) {
-        appendMessage("error", "Enter a message for this mode.");
+    function responseText(data) {
+      if (data.response !== undefined) {
+        return typeof data.response === "string" ? data.response : pretty(data.response);
+      }
+      if (data.error) return data.error;
+      return pretty(data);
+    }
+
+    async function loadModels() {
+      try {
+        const result = await fetch("/models", { cache: "no-store" });
+        const data = await result.json();
+        if (!result.ok) throw new Error(data.error || "Unable to load models");
+        const models = Array.isArray(data.models) ? data.models : [];
+        state.defaultModel = data.defaultModel || data.configuredModel || "";
+        els.model.textContent = "";
+        for (const item of models) {
+          const name = typeof item === "string" ? item : item.name;
+          if (!name) continue;
+          const option = document.createElement("option");
+          option.value = name;
+          option.textContent = name;
+          els.model.appendChild(option);
+        }
+        if (!models.length && state.defaultModel) {
+          const option = document.createElement("option");
+          option.value = state.defaultModel;
+          option.textContent = state.defaultModel;
+          els.model.appendChild(option);
+        }
+        if (state.defaultModel) els.model.value = state.defaultModel;
+      } catch (error) {
+        els.model.textContent = "";
+        const option = document.createElement("option");
+        option.value = state.defaultModel;
+        option.textContent = state.defaultModel || "Model unavailable";
+        els.model.appendChild(option);
+      }
+    }
+
+    async function refreshHealth() {
+      try {
+        const result = await fetch("/health", { cache: "no-store" });
+        const data = await result.json();
+        state.lastHealth = data;
+        state.gatewayOrigin = data.config && data.config.gatewayOrigin ? data.config.gatewayOrigin : "-";
+        state.defaultModel = data.config && data.config.model ? data.config.model : state.defaultModel;
+        setHealth(els.healthGateway, Boolean(data.gateway && data.gateway.ok), data.gateway && data.gateway.ok ? "✅ " + data.gateway.status : "❌ " + safeText(data.gateway && data.gateway.status));
+        setHealth(els.healthTunnel, Boolean(data.tunnel && data.tunnel.ok), data.tunnel && data.tunnel.ok ? "✅ reachable" : "❌ unavailable");
+        setHealth(els.healthLlm, Boolean(data.llm && data.llm.ok), data.llm && data.llm.ok ? "✅ " + safeText(data.llm.model || state.defaultModel) : "❌ " + safeText(data.llm && data.llm.status));
+        els.healthModel.textContent = safeText(state.defaultModel);
+        els.healthWorker.textContent = data.version || state.workerVersion;
+        els.diagGateway.textContent = state.gatewayOrigin;
+      } catch (error) {
+        setHealth(els.healthGateway, false, "❌ unreachable");
+        setHealth(els.healthTunnel, false, "❌ unavailable");
+        setHealth(els.healthLlm, false, "❌ unknown");
+      }
+    }
+
+    async function sendRequest() {
+      const schemaText = els.schema.value.trim();
+      let schema = null;
+      if (els.mode.value === "json" && schemaText) {
+        try {
+          schema = JSON.parse(schemaText);
+        } catch (error) {
+          els.response.classList.add("error-text");
+          els.response.textContent = "Invalid JSON schema: " + error.message;
+          return;
+        }
+      }
+
+      const request = {
+        mode: els.mode.value,
+        message: els.prompt.value.trim(),
+        model: els.model.value,
+        temperature: Number(els.temperature.value),
+        schema
+      };
+
+      if (request.mode !== "self-test" && !request.message) {
+        els.response.classList.add("error-text");
+        els.response.textContent = "Prompt is required for this mode.";
         return;
       }
 
-      send.disabled = true;
-      if (prompt) appendMessage("user", prompt);
-      message.value = "";
-      const pending = appendMessage("bot", "Thinking...");
+      els.send.disabled = true;
+      els.response.classList.remove("error-text");
+      els.response.textContent = "Running...";
+      els.rawRequest.textContent = pretty(request);
 
       try {
         const result = await fetch("/chat", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ mode: selectedMode, message: prompt })
+          body: JSON.stringify(request)
         });
-
         const data = await result.json().catch(() => ({}));
+        els.rawResponse.textContent = pretty(data);
+        updateDiagnostics(data);
+        renderTrace(data);
         if (!result.ok) {
-          throw new Error(data.error || "Request failed");
+          els.response.classList.add("error-text");
         }
-
-        pending.textContent = data.response || JSON.stringify(data, null, 2);
+        els.response.textContent = responseText(data);
       } catch (error) {
-        pending.classList.add("error");
-        pending.textContent = error.message || "Unable to reach the chat service.";
+        const data = { error: "Worker request failed", detail: error.message };
+        els.rawResponse.textContent = pretty(data);
+        els.response.classList.add("error-text");
+        els.response.textContent = data.error + ": " + data.detail;
       } finally {
-        send.disabled = false;
-        message.focus();
-        history.scrollTop = history.scrollHeight;
+        els.send.disabled = false;
       }
+    }
+
+    els.temperature.addEventListener("input", () => {
+      els.temperatureValue.textContent = els.temperature.value;
     });
+
+    els.mode.addEventListener("change", () => {
+      els.schemaPanel.hidden = els.mode.value !== "json";
+      els.diagMode.textContent = els.mode.value;
+    });
+
+    els.model.addEventListener("change", () => {
+      els.diagModel.textContent = els.model.value;
+    });
+
+    els.send.addEventListener("click", sendRequest);
+    els.clear.addEventListener("click", () => {
+      els.prompt.value = "";
+      els.response.textContent = "Ready.";
+      els.trace.textContent = "";
+      els.rawRequest.textContent = "{}";
+      els.rawResponse.textContent = "{}";
+    });
+    els.refreshHealth.addEventListener("click", refreshHealth);
+
+    loadModels().then(refreshHealth);
+    setInterval(refreshHealth, 30000);
   </script>
 </body>
 </html>`;
@@ -307,32 +671,98 @@ async function handleRequest(request, env) {
   }
 
   if (request.method === "GET" && url.pathname === "/health") {
-    return json({
-      ok: true,
-      version: APP_VERSION,
-      config: {
-        gatewayConfigured: Boolean(env.DAEDALUS_LLM_GATEWAY_URL),
-        gatewayOrigin: safeOrigin(env.DAEDALUS_LLM_GATEWAY_URL),
-        apiKeyConfigured: Boolean(env.DAEDALUS_LLM_API_KEY),
-        modelConfigured: Boolean(env.DAEDALUS_LLM_MODEL),
-        model: env.DAEDALUS_LLM_MODEL || null,
-      },
-    });
+    return handleHealth(env);
+  }
+
+  if (request.method === "GET" && url.pathname === "/models") {
+    return handleModels(env);
   }
 
   if (request.method === "POST" && url.pathname === "/chat") {
     return handleChat(request, env);
   }
 
-  if (request.method === "OPTIONS" && url.pathname === "/chat") {
+  if (request.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: corsHeaders() });
   }
 
   return json({ error: "Not found" }, 404);
 }
 
+async function handleModels(env) {
+  const configuredModel = env.DAEDALUS_LLM_MODEL || null;
+  if (!hasGatewayConfig(env)) {
+    return json({
+      error: "LLM gateway is not configured",
+      defaultModel: configuredModel,
+      models: configuredModel ? [{ name: configuredModel }] : [],
+    }, 500);
+  }
+
+  const result = await gatewayFetch(env, "/models", { method: "GET", auth: true });
+  if (!result.ok) {
+    return json({
+      error: classifyGatewayError(result),
+      status: result.status,
+      defaultModel: configuredModel,
+      models: configuredModel ? [{ name: configuredModel }] : [],
+      body: safeGatewayBody(result.body),
+    }, result.status || 502);
+  }
+
+  return json({
+    defaultModel: result.body.defaultModel || configuredModel,
+    configuredModel,
+    models: Array.isArray(result.body.models) ? result.body.models : [],
+  });
+}
+
+async function handleHealth(env) {
+  const gatewayOrigin = safeOrigin(env.DAEDALUS_LLM_GATEWAY_URL);
+  const configuredModel = env.DAEDALUS_LLM_MODEL || null;
+  const health = await gatewayFetch(env, "/health", { method: "GET", auth: false, timeoutMs: 8000 });
+  const models = hasGatewayConfig(env)
+    ? await gatewayFetch(env, "/models", { method: "GET", auth: true, timeoutMs: 10000 })
+    : null;
+  const selfTest = hasGatewayConfig(env)
+    ? await gatewayFetch(env, "/v1/self-test", { method: "GET", auth: true, timeoutMs: 20000 })
+    : null;
+
+  return json({
+    ok: Boolean(health.ok && (!selfTest || selfTest.ok)),
+    version: APP_VERSION,
+    config: {
+      gatewayConfigured: Boolean(env.DAEDALUS_LLM_GATEWAY_URL),
+      gatewayOrigin,
+      apiKeyConfigured: Boolean(env.DAEDALUS_LLM_API_KEY),
+      modelConfigured: Boolean(env.DAEDALUS_LLM_MODEL),
+      model: configuredModel,
+    },
+    gateway: diagnosticFromResult(health),
+    tunnel: {
+      ok: Boolean(health.ok || (health.status && health.status !== 0)),
+      status: health.status || 0,
+      latencyMs: health.ms,
+    },
+    llm: selfTest ? {
+      ok: Boolean(selfTest.ok),
+      status: selfTest.status,
+      latencyMs: selfTest.ms,
+      model: selfTest.body.model || configuredModel,
+      error: selfTest.ok ? undefined : classifyGatewayError(selfTest),
+    } : {
+      ok: false,
+      status: 0,
+      model: configuredModel,
+      error: "LLM gateway is not configured",
+    },
+    models: models && models.ok && Array.isArray(models.body.models) ? models.body.models : [],
+  });
+}
+
 async function handleChat(request, env) {
-  if (!env.DAEDALUS_LLM_GATEWAY_URL || !env.DAEDALUS_LLM_API_KEY) {
+  const workerStarted = Date.now();
+  if (!hasGatewayConfig(env)) {
     return json({ error: "LLM gateway is not configured" }, 500);
   }
 
@@ -340,34 +770,159 @@ async function handleChat(request, env) {
   try {
     body = await request.json();
   } catch {
-    return json({ error: "Expected JSON body" }, 400);
+    return json({ error: "Invalid JSON", detail: "Expected JSON body" }, 400);
   }
 
   const mode = normalizeMode(body.mode);
   const message = typeof body.message === "string" ? body.message.trim() : "";
+  const model = typeof body.model === "string" && body.model ? body.model : env.DAEDALUS_LLM_MODEL;
+  const temperature = normalizeTemperature(body.temperature);
+  const schema = body.schema && typeof body.schema === "object" ? body.schema : undefined;
 
   if (mode !== "self-test" && !message) {
-    return json({ error: "message is required" }, 400);
+    return json({ error: "Prompt is required for this mode" }, 400);
   }
 
-  const gatewayResponse = await callGateway({ env, mode, message });
-  const gatewayText = await gatewayResponse.text();
-  const gatewayBody = parseGatewayBody(gatewayText);
-
-  if (!gatewayResponse.ok) {
-    return json({
-      mode,
-      error: gatewayBody.error || gatewayBody.message || "LLM gateway request failed",
-      status: gatewayResponse.status,
-    }, gatewayResponse.status);
-  }
-
-  return json({
-    mode,
-    endpoint: endpointForMode(mode),
-    response: extractGatewayResponse(gatewayBody),
-    raw: gatewayBody,
+  const requestBody = payloadForMode({ mode, message, model, temperature, schema });
+  const initialEndpoint = endpointForMode(mode);
+  let endpoint = initialEndpoint;
+  let gateway = await gatewayFetch(env, endpoint, {
+    method: mode === "self-test" ? "GET" : "POST",
+    auth: true,
+    body: mode === "self-test" ? undefined : requestBody,
   });
+
+  let fallbackUsed = false;
+  if (mode === "chat" && (gateway.status === 404 || gateway.status === 405)) {
+    fallbackUsed = true;
+    endpoint = "/v1/summarise";
+    gateway = await gatewayFetch(env, endpoint, {
+      method: "POST",
+      auth: true,
+      body: chatFallbackPayload({ message, model, temperature }),
+    });
+  }
+
+  const totalMs = Date.now() - workerStarted;
+  const responseStatus = gateway.ok ? 200 : gateway.status || 502;
+  const responsePayload = {
+    mode,
+    endpoint,
+    fallbackUsed,
+    response: gateway.ok ? extractGatewayResponse(gateway.body) : undefined,
+    error: gateway.ok ? undefined : classifyGatewayError(gateway),
+    safeBody: gateway.ok ? undefined : safeGatewayBody(gateway.body),
+    diagnostics: {
+      workerVersion: APP_VERSION,
+      gatewayUrl: safeOrigin(env.DAEDALUS_LLM_GATEWAY_URL),
+      selectedModel: model,
+      mode,
+      httpStatus: gateway.status,
+      totalMs,
+      gatewayMs: gateway.ms,
+    },
+    trace: buildTrace({
+      prompt: message,
+      endpoint,
+      model,
+      status: gateway.status,
+      gatewayMs: gateway.ms,
+      totalMs,
+    }),
+    rawRequest: {
+      endpoint,
+      mode,
+      model,
+      temperature,
+      body: requestBody,
+    },
+    rawResponse: gateway.body,
+  };
+
+  return json(responsePayload, responseStatus);
+}
+
+function hasGatewayConfig(env) {
+  return Boolean(env.DAEDALUS_LLM_GATEWAY_URL && env.DAEDALUS_LLM_API_KEY);
+}
+
+async function gatewayFetch(env, endpoint, options = {}) {
+  const started = Date.now();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), options.timeoutMs || DEFAULT_TIMEOUT_MS);
+  const headers = {};
+
+  if (options.auth) {
+    headers["x-daedalus-api-key"] = env.DAEDALUS_LLM_API_KEY;
+  }
+
+  if (options.body !== undefined) {
+    headers["content-type"] = "application/json";
+  }
+
+  try {
+    const response = await fetch(buildGatewayUrl(env.DAEDALUS_LLM_GATEWAY_URL, endpoint), {
+      method: options.method || "GET",
+      headers,
+      body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      signal: controller.signal,
+    });
+    const text = await response.text();
+    return {
+      ok: response.ok,
+      status: response.status,
+      ms: Date.now() - started,
+      body: parseGatewayBody(text),
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      status: error && error.name === "AbortError" ? 504 : 0,
+      ms: Date.now() - started,
+      body: {
+        error: error && error.name === "AbortError" ? "Timeout" : "Gateway unreachable",
+        detail: error && error.message ? error.message : String(error),
+      },
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function diagnosticFromResult(result) {
+  return {
+    ok: Boolean(result.ok),
+    status: result.status,
+    latencyMs: result.ms,
+    error: result.ok ? undefined : classifyGatewayError(result),
+  };
+}
+
+function classifyGatewayError(result) {
+  if (result.status === 0) return "Gateway unreachable";
+  if (result.status === 401 || result.status === 403) return "Authentication failed";
+  if (result.status === 404) return "Endpoint or model unavailable";
+  if (result.status === 408 || result.status === 504) return "Timeout";
+  if (result.body && result.body.error) return String(result.body.error);
+  return `Gateway request failed with HTTP ${result.status}`;
+}
+
+function safeGatewayBody(body) {
+  if (!body || typeof body !== "object") return body;
+  const clone = JSON.parse(JSON.stringify(body));
+  redactObject(clone);
+  return clone;
+}
+
+function redactObject(value) {
+  if (!value || typeof value !== "object") return;
+  for (const key of Object.keys(value)) {
+    if (/key|token|secret|authorization/i.test(key)) {
+      value[key] = "[redacted]";
+    } else {
+      redactObject(value[key]);
+    }
+  }
 }
 
 function normalizeMode(mode) {
@@ -375,47 +930,37 @@ function normalizeMode(mode) {
   return MODES.has(value) ? value : "chat";
 }
 
-function callGateway({ env, mode, message }) {
-  const endpoint = endpointForMode(mode);
-  const method = mode === "self-test" ? "GET" : "POST";
-  const init = {
-    method,
-    headers: gatewayHeaders(env),
-  };
-
-  if (method === "POST") {
-    init.headers["content-type"] = "application/json";
-    init.body = JSON.stringify(payloadForMode({ env, mode, message }));
-  }
-
-  return fetch(buildGatewayUrl(env.DAEDALUS_LLM_GATEWAY_URL, endpoint), init);
-}
-
-function gatewayHeaders(env) {
-  return {
-    "x-daedalus-api-key": env.DAEDALUS_LLM_API_KEY,
-  };
+function normalizeTemperature(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return 0.4;
+  return Math.min(1.5, Math.max(0, number));
 }
 
 function endpointForMode(mode) {
-  if (mode === "json") return "/v1/json";
+  if (mode === "chat") return "/v1/chat";
+  if (mode === "summarise") return "/v1/summarise";
   if (mode === "extract-evidence") return "/v1/extract-evidence";
+  if (mode === "json") return "/v1/json";
   if (mode === "self-test") return "/v1/self-test";
   return "/v1/summarise";
 }
 
-function payloadForMode({ env, mode, message }) {
-  const model = env.DAEDALUS_LLM_MODEL || undefined;
-
-  if (mode === "json") {
+function payloadForMode({ mode, message, model, temperature, schema }) {
+  if (mode === "chat") {
     return {
       model,
-      prompt: message,
-      schema: {
-        answer: "string",
-        key_points: ["string"],
-        confidence: "low|medium|high",
-      },
+      message,
+      temperature,
+      system: "You are petllama, a direct conversational assistant for gateway testing.",
+    };
+  }
+
+  if (mode === "summarise") {
+    return {
+      model,
+      text: message,
+      maxWords: 180,
+      temperature,
     };
   }
 
@@ -424,29 +969,54 @@ function payloadForMode({ env, mode, message }) {
       model,
       question: "Extract the key claims and supporting evidence from this text.",
       text: message,
+      temperature,
     };
   }
 
-  if (mode === "chat") {
+  if (mode === "json") {
     return {
       model,
-      text: message,
-      maxWords: 120,
-      system: "You are petllama, a direct conversational assistant. You are not summarising text unless explicitly asked.",
-      instruction: [
-        "Treat the text below as a chat message from the user.",
-        "Reply naturally and directly.",
-        "For greetings or small talk, respond like a normal assistant.",
-        "Do not say there is no text to summarise.",
-      ].join(" "),
+      prompt: message,
+      schema: schema || {
+        answer: "string",
+        key_points: ["string"],
+        confidence: "low|medium|high",
+      },
+      temperature,
     };
   }
 
+  return undefined;
+}
+
+function chatFallbackPayload({ message, model, temperature }) {
   return {
     model,
     text: message,
-    maxWords: 180,
+    maxWords: 140,
+    temperature,
+    system: "You are petllama, a direct conversational assistant. You are not summarising text unless explicitly asked.",
+    instruction: [
+      "Treat the text below as a chat message from the user.",
+      "Reply naturally and directly.",
+      "Do not say there is no text to summarise.",
+    ].join(" "),
   };
+}
+
+function buildTrace({ prompt, endpoint, model, status, gatewayMs, totalMs }) {
+  return [
+    { name: "Prompt", latencyMs: 0 },
+    { name: "Worker", endpoint: "/chat", model, latencyMs: totalMs, status },
+    { name: "Tunnel", endpoint: safePath(endpoint), latencyMs: gatewayMs, status },
+    { name: "Gateway", endpoint, model, latencyMs: gatewayMs, status },
+    { name: "Model", model, latencyMs: gatewayMs, status },
+    { name: "Response", latencyMs: totalMs, status },
+  ].map((step, index) => index === 0 ? { ...step, promptLength: prompt.length } : step);
+}
+
+function safePath(endpoint) {
+  return endpoint || "-";
 }
 
 function buildGatewayUrl(base, path) {
@@ -473,8 +1043,8 @@ function extractGatewayResponse(data) {
   if (typeof data.output === "string") return data.output;
   if (typeof data.text === "string") return data.text;
   if (typeof data.result === "string") return data.result;
-  if (data.json !== undefined) return JSON.stringify(data.json, null, 2);
-  return JSON.stringify(data, null, 2);
+  if (data.json !== undefined) return data.json;
+  return data;
 }
 
 function safeOrigin(value) {

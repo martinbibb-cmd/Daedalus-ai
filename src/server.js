@@ -74,6 +74,29 @@ function buildServer({ config, fetchImpl = fetch, logger = true }) {
     }
   });
 
+  app.post('/v1/chat', async (request, reply) => {
+    const body = request.body || {};
+    if (!body.message || typeof body.message !== 'string') {
+      return reply.code(400).send({ error: 'message is required' });
+    }
+
+    const result = await generate({
+      config,
+      fetchImpl,
+      model: body.model,
+      system: body.system || 'You are a concise conversational assistant.',
+      prompt: body.message,
+      options: {
+        temperature: body.temperature ?? 0.4,
+      },
+    });
+
+    return {
+      model: result.model || body.model || config.defaultModel,
+      response: String(result.response || '').trim(),
+    };
+  });
+
   app.post('/v1/json', async (request, reply) => {
     const body = request.body || {};
     if (!body.prompt || typeof body.prompt !== 'string') {

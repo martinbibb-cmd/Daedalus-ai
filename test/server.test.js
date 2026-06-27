@@ -156,6 +156,34 @@ test('json route returns parsed model JSON', async () => {
   assert.deepEqual(response.json().json, { answer: 42 });
 });
 
+test('chat route calls Ollama with conversational prompt', async () => {
+  const fetchImpl = async (url, init) => {
+    assert.equal(url, 'http://ollama.test/api/generate');
+    const body = JSON.parse(init.body);
+    assert.equal(body.model, 'llama3.2:3b');
+    assert.equal(body.prompt, 'Hello');
+    assert.equal(body.system, 'You are concise.');
+    assert.equal(body.options.temperature, 0.7);
+    assert.equal(body.stream, false);
+    return jsonResponse({ model: body.model, response: 'Hi. How can I help?' });
+  };
+  const app = buildServer({ config, fetchImpl, logger: false });
+
+  const response = await app.inject({
+    method: 'POST',
+    url: '/v1/chat',
+    headers: { 'x-daedalus-api-key': 'test-secret' },
+    payload: {
+      message: 'Hello',
+      system: 'You are concise.',
+      temperature: 0.7,
+    },
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().response, 'Hi. How can I help?');
+});
+
 test('summarise route allows a caller-provided system prompt', async () => {
   const fetchImpl = async (url, init) => {
     assert.equal(url, 'http://ollama.test/api/generate');

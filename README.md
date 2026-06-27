@@ -6,9 +6,9 @@ Fastify API gateway for private Ollama access on the Daedalus network.
 
 Apps should call this gateway only. Do not expose raw Ollama publicly.
 
-## petllama Worker Test Bench
+## Pet Llama v0.2 Engineering Console
 
-`petllama` is a Cloudflare Worker UI for testing the Daedalus gateway from a browser without exposing gateway secrets.
+`petllama` is a Cloudflare Worker UI for testing the Daedalus gateway from a browser without exposing gateway secrets. It is an engineering console, not a ChatGPT clone.
 
 Architecture:
 
@@ -21,17 +21,29 @@ Browser petllama UI
 
 The browser only calls the Worker:
 
-- `GET /` serves the test bench UI.
-- `GET /health` returns Worker version and non-secret configuration diagnostics.
-- `POST /chat` accepts the selected mode and message, then the Worker calls the private gateway.
+- `GET /` serves the console UI.
+- `GET /health` returns Worker version, non-secret configuration diagnostics, gateway reachability, tunnel reachability, and LLM self-test state.
+- `GET /models` returns the gateway model list through the Worker.
+- `POST /chat` accepts the selected mode, model, temperature, optional schema, and prompt, then the Worker calls the private gateway.
 
 The Worker supports these modes:
 
-- Chat: calls `/v1/summarise` with conversational instruction wording.
+- Chat: calls `/v1/chat`, with fallback to `/v1/summarise` if the chat endpoint is unavailable.
 - Summarise: calls `/v1/summarise`.
-- JSON: calls `/v1/json` with a simple response schema.
 - Extract evidence: calls `/v1/extract-evidence`.
+- JSON: calls `/v1/json` with an optional schema from the console.
 - Self-test: calls `GET /v1/self-test`.
+
+The console includes:
+
+- model selector populated from `/models`
+- temperature control from `0.0` to `1.5`
+- formatted response panel
+- collapsible diagnostics and trace panels
+- hidden-by-default raw request and raw response JSON
+- health banner that refreshes every 30 seconds
+
+Secrets stay server-side. The Worker sends `x-daedalus-api-key` to the gateway and never exposes it to browser JavaScript.
 
 Required Cloudflare secret:
 
