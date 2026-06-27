@@ -6,4 +6,8 @@ node_modules/
 npm-debug.log*
 coverage/
 .tap/
+__pycache__/
+.pytest_cache/
+.venv/
+*.pyc
 

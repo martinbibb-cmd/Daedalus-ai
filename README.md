@@ -45,6 +45,98 @@ The console includes:
 
 Secrets stay server-side. The Worker sends `x-daedalus-api-key` to the gateway and never exposes it to browser JavaScript.
 
+## Manual Ripper: Local Manual Ingestion/RAG
+
+Manual Ripper is local document ingestion and retrieval augmented generation, not model training.
+
+Training changes model weights. Manual Ripper keeps the model unchanged and instead stores boiler/heating PDFs locally, extracts page text, retrieves relevant pages, and asks the gateway to answer using only that evidence.
+
+Architecture:
+
+```text
+Pet Llama Worker
+  -> Manual Ripper service on the Daedalus VM
+  -> /srv/daedalus/manuals local storage
+  -> Daedalus LLM Gateway
+  -> Ollama
+```
+
+Manual data is not stored in Cloudflare. The Worker is a thin proxy to the private Manual Ripper service.
+
+Storage layout:
+
+```text
+/srv/daedalus/manuals/
+  originals/
+  extracted/
+  indexes/
+  metadata.sqlite
+```
+
+Manual Ripper endpoints:
+
+- `GET /health`
+- `GET /manuals`
+- `POST /manuals/upload`
+- `GET /manuals/{id}`
+- `POST /manuals/{id}/extract`
+- `POST /manuals/{id}/query`
+- `POST /manuals/search`
+
+Manual Ripper service setup:
+
+```bash
+cd manual-ripper
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -r requirements.txt
+sudo useradd --system --home /nonexistent --shell /usr/sbin/nologin manual-ripper || true
+sudo bash scripts/bootstrap-storage.sh
+```
+
+Create `/etc/daedalus-manual-ripper.env`:
+
+```bash
+MANUAL_RIPPER_STORAGE_ROOT=/srv/daedalus/manuals
+DAEDALUS_LLM_GATEWAY_URL=https://ai.atlas-phm.uk
+DAEDALUS_LLM_API_KEY=replace-with-secret
+DAEDALUS_LLM_MODEL=llama3.2:3b
+HOST=127.0.0.1
+PORT=8791
+```
+
+Install systemd unit:
+
+```bash
+sudo cp manual-ripper/systemd/daedalus-manual-ripper.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now daedalus-manual-ripper
+```
+
+Worker configuration:
+
+```toml
+MANUAL_RIPPER_BASE_URL = "https://manuals.atlas-phm.uk"
+```
+
+Expose Manual Ripper privately, preferably through Cloudflare Tunnel or another controlled private route. Do not expose it as an unauthenticated public internet service.
+
+Manual query response shape:
+
+```json
+{
+  "answer": "string",
+  "manual_id": "string",
+  "evidence": [
+    {
+      "page": 1,
+      "snippet": "string",
+      "confidence": "low|medium|high"
+    }
+  ]
+}
+```
+
 Required Cloudflare secret:
 
 ```bash

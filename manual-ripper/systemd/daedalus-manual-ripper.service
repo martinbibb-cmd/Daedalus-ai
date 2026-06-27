@@ -1,0 +1,21 @@
+[Unit]
+Description=Daedalus Manual Ripper
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=manual-ripper
+Group=manual-ripper
+WorkingDirectory=/opt/daedalus-ai/manual-ripper
+EnvironmentFile=/etc/daedalus-manual-ripper.env
+ExecStart=/opt/daedalus-ai/manual-ripper/.venv/bin/uvicorn app.main:app --host ${HOST} --port ${PORT}
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/srv/daedalus/manuals
+
+[Install]
+WantedBy=multi-user.target

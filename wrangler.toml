@@ -7,6 +7,7 @@ preview_urls = true
 [vars]
 DAEDALUS_LLM_GATEWAY_URL = "https://ai.atlas-phm.uk"
 DAEDALUS_LLM_MODEL = "llama3.2:3b"
+MANUAL_RIPPER_BASE_URL = "https://manuals.atlas-phm.uk"
 
 [observability]
 enabled = true

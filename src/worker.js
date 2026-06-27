@@ -1,4 +1,4 @@
-const APP_VERSION = "petllama-v0.2-engineering-console";
+const APP_VERSION = "petllama-v0.3-manual-ripper";
 const DEFAULT_TIMEOUT_MS = 30000;
 
 const MODES = new Set([
@@ -7,6 +7,7 @@ const MODES = new Set([
   "extract-evidence",
   "json",
   "self-test",
+  "manual-ripper",
 ]);
 
 const CHAT_PAGE = `<!doctype html>
@@ -160,6 +161,21 @@ const CHAT_PAGE = `<!doctype html>
       min-height: 110px;
     }
 
+    .manual-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: end;
+    }
+
+    .manual-file {
+      padding: 10px 12px;
+      border: 1px solid #c8ced8;
+      border-radius: 8px;
+      background: #ffffff;
+      color: inherit;
+    }
+
     .temp-row {
       display: grid;
       grid-template-columns: 1fr auto;
@@ -281,6 +297,7 @@ const CHAT_PAGE = `<!doctype html>
       .panel,
       .control-bar,
       select,
+      input[type="file"],
       textarea {
         background: #171d25;
         border-color: #344052;
@@ -351,6 +368,7 @@ const CHAT_PAGE = `<!doctype html>
               <option value="extract-evidence">Extract Evidence</option>
               <option value="json">JSON</option>
               <option value="self-test">Self Test</option>
+              <option value="manual-ripper">Manual Ripper</option>
             </select>
           </label>
           <label>
@@ -381,6 +399,24 @@ const CHAT_PAGE = `<!doctype html>
           Optional JSON schema
           <textarea id="schema" class="schema-box" placeholder='{"answer":"string","confidence":"low|medium|high"}'></textarea>
         </label>
+
+        <section id="manual-panel" class="panel" hidden>
+          <strong>Manual Ripper</strong>
+          <div class="manual-grid">
+            <label>
+              PDF upload
+              <input id="manual-file" class="manual-file" type="file" accept="application/pdf,.pdf">
+            </label>
+            <button id="manual-upload" type="button">Upload</button>
+          </div>
+          <label>
+            Manual library
+            <select id="manual-list">
+              <option value="">No manuals loaded</option>
+            </select>
+          </label>
+          <button id="manual-refresh" class="secondary" type="button">Refresh manuals</button>
+        </section>
 
         <section class="panel">
           <strong>Response</strong>
@@ -436,6 +472,11 @@ const CHAT_PAGE = `<!doctype html>
       prompt: document.getElementById("prompt"),
       schemaPanel: document.getElementById("schema-panel"),
       schema: document.getElementById("schema"),
+      manualPanel: document.getElementById("manual-panel"),
+      manualFile: document.getElementById("manual-file"),
+      manualUpload: document.getElementById("manual-upload"),
+      manualList: document.getElementById("manual-list"),
+      manualRefresh: document.getElementById("manual-refresh"),
       send: document.getElementById("send"),
       clear: document.getElementById("clear"),
       response: document.getElementById("response"),
@@ -564,7 +605,70 @@ const CHAT_PAGE = `<!doctype html>
       }
     }
 
+    async function loadManuals() {
+      try {
+        const result = await fetch("/manuals", { cache: "no-store" });
+        const data = await result.json();
+        if (!result.ok) throw new Error(data.error || "Manual Ripper service is unreachable");
+        const manuals = Array.isArray(data.manuals) ? data.manuals : [];
+        els.manualList.textContent = "";
+        if (!manuals.length) {
+          const option = document.createElement("option");
+          option.value = "";
+          option.textContent = "No manuals loaded";
+          els.manualList.appendChild(option);
+          return;
+        }
+        for (const manual of manuals) {
+          const option = document.createElement("option");
+          option.value = manual.id;
+          option.textContent = [manual.manufacturer, manual.model].filter(Boolean).join(" ") || manual.filename;
+          els.manualList.appendChild(option);
+        }
+      } catch (error) {
+        els.manualList.textContent = "";
+        const option = document.createElement("option");
+        option.value = "";
+        option.textContent = "Manual Ripper unreachable";
+        els.manualList.appendChild(option);
+      }
+    }
+
+    async function uploadManual() {
+      const file = els.manualFile.files && els.manualFile.files[0];
+      if (!file) {
+        els.response.classList.add("error-text");
+        els.response.textContent = "Choose a PDF manual first.";
+        return;
+      }
+      const formData = new FormData();
+      formData.append("file", file);
+      els.manualUpload.disabled = true;
+      els.response.classList.remove("error-text");
+      els.response.textContent = "Uploading manual...";
+      try {
+        const result = await fetch("/manuals/upload", { method: "POST", body: formData });
+        const data = await result.json().catch(() => ({}));
+        els.rawResponse.textContent = pretty(data);
+        if (!result.ok) throw new Error(data.error || data.detail || "Manual upload failed");
+        els.response.textContent = "Uploaded manual. Extracting text...";
+        await fetch("/manuals/" + encodeURIComponent(data.manual.id) + "/extract", { method: "POST" });
+        await loadManuals();
+        els.manualList.value = data.manual.id;
+        els.response.textContent = "Manual uploaded and extraction requested.";
+      } catch (error) {
+        els.response.classList.add("error-text");
+        els.response.textContent = error.message || "Manual Ripper service is unreachable.";
+      } finally {
+        els.manualUpload.disabled = false;
+      }
+    }
+
     async function sendRequest() {
+      if (els.mode.value === "manual-ripper") {
+        return sendManualQuestion();
+      }
+
       const schemaText = els.schema.value.trim();
       let schema = null;
       if (els.mode.value === "json" && schemaText) {
@@ -620,13 +724,65 @@ const CHAT_PAGE = `<!doctype html>
       }
     }
 
+    async function sendManualQuestion() {
+      const manualId = els.manualList.value;
+      const question = els.prompt.value.trim();
+      if (!manualId) {
+        els.response.classList.add("error-text");
+        els.response.textContent = "Select or upload a manual first.";
+        return;
+      }
+      if (!question) {
+        els.response.classList.add("error-text");
+        els.response.textContent = "Question is required for Manual Ripper.";
+        return;
+      }
+      const request = { question, limit: 5 };
+      els.send.disabled = true;
+      els.response.classList.remove("error-text");
+      els.response.textContent = "Querying manual evidence...";
+      els.rawRequest.textContent = pretty({ manual_id: manualId, ...request });
+      try {
+        const result = await fetch("/manuals/" + encodeURIComponent(manualId) + "/query", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(request)
+        });
+        const data = await result.json().catch(() => ({}));
+        els.rawResponse.textContent = pretty(data);
+        if (!result.ok) throw new Error(data.error || data.detail || "Manual query failed");
+        const evidence = Array.isArray(data.evidence) ? data.evidence : [];
+        els.response.textContent = [
+          data.answer || "No answer returned.",
+          "",
+          "Evidence:",
+          ...evidence.map((item) => "Page " + item.page + " [" + item.confidence + "]: " + item.snippet)
+        ].join("\\n");
+        updateDiagnostics({
+          diagnostics: {
+            gatewayUrl: "Manual Ripper",
+            selectedModel: els.model.value,
+            mode: "manual-ripper",
+            httpStatus: result.status
+          }
+        });
+      } catch (error) {
+        els.response.classList.add("error-text");
+        els.response.textContent = error.message || "Manual Ripper service is unreachable.";
+      } finally {
+        els.send.disabled = false;
+      }
+    }
+
     els.temperature.addEventListener("input", () => {
       els.temperatureValue.textContent = els.temperature.value;
     });
 
     els.mode.addEventListener("change", () => {
       els.schemaPanel.hidden = els.mode.value !== "json";
+      els.manualPanel.hidden = els.mode.value !== "manual-ripper";
       els.diagMode.textContent = els.mode.value;
+      if (els.mode.value === "manual-ripper") loadManuals();
     });
 
     els.model.addEventListener("change", () => {
@@ -634,6 +790,8 @@ const CHAT_PAGE = `<!doctype html>
     });
 
     els.send.addEventListener("click", sendRequest);
+    els.manualUpload.addEventListener("click", uploadManual);
+    els.manualRefresh.addEventListener("click", loadManuals);
     els.clear.addEventListener("click", () => {
       els.prompt.value = "";
       els.response.textContent = "Ready.";
@@ -643,7 +801,7 @@ const CHAT_PAGE = `<!doctype html>
     });
     els.refreshHealth.addEventListener("click", refreshHealth);
 
-    loadModels().then(refreshHealth);
+    loadModels().then(refreshHealth).then(loadManuals);
     setInterval(refreshHealth, 30000);
   </script>
 </body>
@@ -678,6 +836,10 @@ async function handleRequest(request, env) {
     return handleModels(env);
   }
 
+  if (url.pathname === "/manuals" || url.pathname.startsWith("/manuals/")) {
+    return handleManualProxy(request, env, url);
+  }
+
   if (request.method === "POST" && url.pathname === "/chat") {
     return handleChat(request, env);
   }
@@ -687,6 +849,51 @@ async function handleRequest(request, env) {
   }
 
   return json({ error: "Not found" }, 404);
+}
+
+async function handleManualProxy(request, env, url) {
+  if (!env.MANUAL_RIPPER_BASE_URL) {
+    return json({
+      error: "Manual Ripper service is not configured",
+      detail: "Set MANUAL_RIPPER_BASE_URL to the private service URL or Cloudflare Tunnel route.",
+    }, 503);
+  }
+
+  const started = Date.now();
+  const target = buildGatewayUrl(env.MANUAL_RIPPER_BASE_URL, url.pathname);
+  const headers = {};
+  const contentType = request.headers.get("content-type");
+  if (contentType) headers["content-type"] = contentType;
+
+  try {
+    const upstream = await fetch(target, {
+      method: request.method,
+      headers,
+      body: request.method === "GET" || request.method === "HEAD" ? undefined : request.body,
+    });
+    const text = await upstream.text();
+    const body = parseGatewayBody(text);
+    return json({
+      ...safeGatewayBody(body),
+      diagnostics: {
+        service: "manual-ripper",
+        endpoint: url.pathname,
+        httpStatus: upstream.status,
+        totalMs: Date.now() - started,
+      },
+    }, upstream.status);
+  } catch (error) {
+    return json({
+      error: "Manual Ripper service is unreachable",
+      detail: error && error.message ? error.message : String(error),
+      diagnostics: {
+        service: "manual-ripper",
+        endpoint: url.pathname,
+        httpStatus: 0,
+        totalMs: Date.now() - started,
+      },
+    }, 502);
+  }
 }
 
 async function handleModels(env) {
