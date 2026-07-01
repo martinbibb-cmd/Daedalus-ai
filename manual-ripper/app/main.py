@@ -811,13 +811,17 @@ def deterministic_answer(manual_id: str, question: str) -> dict[str, Any] | None
 
 
 def evidence_object_to_response(item: dict[str, Any]) -> dict[str, Any]:
+    response_type = item.get("source_type")
+    if item.get("category") == "dimensions" and response_type == "text":
+        response_type = "dimension"
     return {
         "id": item.get("id"),
         "manual_id": item.get("manual_id"),
         "page": item.get("source_page"),
         "snippet": item.get("evidence_text") or item.get("notes") or "",
         "description": item.get("evidence_text") or item.get("notes") or "",
-        "type": item.get("source_type"),
+        "type": response_type,
+        "source_type": item.get("source_type"),
         "category": item.get("category"),
         "field": item.get("field"),
         "value": item.get("value"),
