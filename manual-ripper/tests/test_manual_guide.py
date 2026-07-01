@@ -136,6 +136,52 @@ def seed_manual_with_invalid_technical_data_dimension_page(manual_id="greenstar-
     return manual_id
 
 
+def seed_manual_with_visual_case_dimensions_only(manual_id="greenstar-ri-visual"):
+    pages = [
+        {
+            "page": 7,
+            "text": (
+                "APPLIANCE INFORMATION 3.1 APPLIANCE Fig. 1 Appliance "
+                "390mm 270mm *600mm to top of case front 590mm* STANDARD PACKAGE"
+            ),
+            "layout_blocks": [],
+            "tables": [],
+            "key_values": [],
+            "assets": {
+                "thumbnail_url": f"/manuals/{manual_id}/assets/page-7-thumb.png",
+                "embedded_images": [{"asset_id": "page-7-image-1.png", "type": "embedded-image"}],
+            },
+        },
+        {
+            "page": 8,
+            "text": "3.2 TECHNICAL DATA Gas flow rate. Maximum rated heat output. Total appliance weight 27.4 kg.",
+            "layout_blocks": [],
+            "tables": [],
+            "key_values": [],
+            "assets": {"thumbnail_url": f"/manuals/{manual_id}/assets/page-8-thumb.png"},
+        },
+    ]
+    main.extracted_path(manual_id).write_text(json.dumps({"manual_id": manual_id, "pages": pages}), encoding="utf-8")
+    with sqlite3.connect(main.DB_PATH) as conn:
+        conn.execute(
+            """
+            INSERT INTO manuals (id, filename, manufacturer, model, appliance_type, uploaded_at, page_count, extraction_status, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
+            """,
+            (
+                manual_id,
+                "greenstar-ri-erp.pdf",
+                "Worcester",
+                "Greenstar Ri ErP",
+                "boiler",
+                datetime.now(timezone.utc).isoformat(),
+                2,
+                "complete",
+            ),
+        )
+    return manual_id
+
+
 def test_greenstar_ri_erp_dimensions_are_answered_with_visual_evidence(tmp_path, monkeypatch):
     configure_storage(tmp_path, monkeypatch)
     manual_id = seed_manual()
@@ -217,7 +263,7 @@ def test_dimension_retrieval_rejects_generic_technical_data_page_without_dimensi
 
 def test_greenstar_ri_page_7_visual_fallback_returns_case_size_without_depth_inference(tmp_path, monkeypatch):
     configure_storage(tmp_path, monkeypatch)
-    manual_id = seed_manual()
+    manual_id = seed_manual_with_visual_case_dimensions_only()
     client = TestClient(main.app)
 
     response = client.post(f"/manuals/{manual_id}/query", json={"question": "What is the size of the case of this boiler?", "limit": 5})
