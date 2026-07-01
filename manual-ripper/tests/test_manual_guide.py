@@ -271,7 +271,7 @@ def test_greenstar_ri_page_7_visual_fallback_returns_case_size_without_depth_inf
     assert response.status_code == 200
     body = response.json()
     answer = body["answer"].lower()
-    assert body["fallback"] == "visual"
+    assert body["source"] == "evidence-store"
     assert body["citations"] == [{"page": 7, "label": "Page 7"}]
     assert body["evidence"][0]["type"] == "visual-dimension"
     assert "width: 390 mm" in answer
@@ -280,3 +280,43 @@ def test_greenstar_ri_page_7_visual_fallback_returns_case_size_without_depth_inf
     assert "depth: not confirmed" in answer
     assert "270 mm annotation" in answer
     assert "depth: 270 mm" not in answer
+
+
+def test_ingest_stores_greenstar_page_7_dimensions_as_visual_evidence(tmp_path, monkeypatch):
+    configure_storage(tmp_path, monkeypatch)
+    manual_id = seed_manual_with_visual_case_dimensions_only()
+    client = TestClient(main.app)
+
+    response = client.get(f"/manuals/{manual_id}/evidence")
+
+    assert response.status_code == 200
+    evidence = response.json()["evidence"]
+    page_7 = [item for item in evidence if item["source_page"] == 7]
+    assert {item["field"] for item in page_7} >= {"width", "case_front_height", "top_of_case_front", "depth"}
+    assert any(item["field"] == "width" and item["value"] == 390 and item["source_type"] == "visual-dimension" for item in page_7)
+    assert any(item["field"] == "depth" and item["value"] is None and item["validation_status"] == "unconfirmed" for item in page_7)
+
+
+def test_show_page_7_returns_page_image_url(tmp_path, monkeypatch):
+    configure_storage(tmp_path, monkeypatch)
+    manual_id = seed_manual_with_visual_case_dimensions_only()
+    client = TestClient(main.app)
+
+    response = client.post(f"/manuals/{manual_id}/query", json={"question": "show the image on page 7", "limit": 5})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["citations"] == [{"page": 7, "label": "Page 7", "url": f"/manuals/{manual_id}/pages/7/image"}]
+    assert body["visual_assets"][0]["url"] == f"/manuals/{manual_id}/pages/7/image"
+
+
+def test_no_generated_image_is_treated_as_source_evidence(tmp_path, monkeypatch):
+    configure_storage(tmp_path, monkeypatch)
+    manual_id = seed_manual_with_visual_case_dimensions_only()
+    client = TestClient(main.app)
+
+    response = client.get(f"/manuals/{manual_id}/evidence")
+
+    assert response.status_code == 200
+    assert response.json()["source_policy"]["generated_images_as_source"] is False
+    assert all(item["generated"] is False for item in response.json()["evidence"])

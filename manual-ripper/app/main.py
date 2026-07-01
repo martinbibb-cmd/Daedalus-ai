@@ -130,6 +130,10 @@ def extracted_path(manual_id: str) -> Path:
     return EXTRACTED_DIR / f"{manual_id}.json"
 
 
+def evidence_index_path(manual_id: str) -> Path:
+    return INDEXES_DIR / f"{manual_id}.evidence.json"
+
+
 def manual_assets_dir(manual_id: str) -> Path:
     return ASSETS_DIR / manual_id
 
@@ -349,6 +353,7 @@ def extract_pdf(manual_id: str) -> dict[str, Any]:
             ),
         )
 
+    build_evidence_index(manual_id, pages)
     return get_manual_or_404(manual_id)
 
 
@@ -358,6 +363,121 @@ def load_pages(manual_id: str) -> list[dict[str, Any]]:
         extract_pdf(manual_id)
     data = json.loads(path.read_text(encoding="utf-8"))
     return data.get("pages", [])
+
+
+def evidence_object(
+    manual: dict[str, Any],
+    *,
+    category: str,
+    field: str,
+    value: Any,
+    unit: str | None,
+    source_page: int,
+    source_type: str,
+    confidence: str,
+    validation_status: str,
+    evidence_text: str,
+    image_region: list[float] | None = None,
+    notes: str | None = None,
+    generated: bool = False,
+) -> dict[str, Any]:
+    value_key = "missing" if value is None else str(value).replace(" ", "_")
+    evidence_id = f"{manual['id']}:{category}:{field}:{source_page}:{value_key}"
+    return {
+        "id": evidence_id,
+        "manual_id": manual["id"],
+        "model": manual.get("model"),
+        "variant": manual.get("model"),
+        "category": category,
+        "field": field,
+        "value": value,
+        "unit": unit,
+        "source_page": source_page,
+        "source_type": source_type,
+        "confidence": confidence,
+        "validation_status": validation_status,
+        "evidence_text": clean_text(evidence_text),
+        "image_url": public_page_image_path(manual["id"], source_page),
+        "image_region": image_region,
+        "bbox": image_region,
+        "notes": notes,
+        "caveats": notes,
+        "generated": generated,
+    }
+
+
+def build_dimension_evidence(manual: dict[str, Any], pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    objects: list[dict[str, Any]] = []
+    for page in pages:
+        if not has_valid_dimension_evidence(page, "appliance dimensions"):
+            continue
+        answer, snippet = parse_dimension_answer(page.get("text", ""))
+        if not answer or not snippet:
+            continue
+        match = re.search(r"H\s+(?P<h>\d+(?:\.\d+)?)\s*mm\s+x\s+W\s+(?P<w>\d+(?:\.\d+)?)\s*mm\s+x\s+D\s+(?P<d>\d+(?:\.\d+)?)\s*mm", answer, re.I)
+        if not match:
+            continue
+        page_number = int(page["page"])
+        objects.extend([
+            evidence_object(manual, category="dimensions", field="height", value=match.group("h"), unit="mm", source_page=page_number, source_type="text", confidence="high", validation_status="validated", evidence_text=snippet),
+            evidence_object(manual, category="dimensions", field="width", value=match.group("w"), unit="mm", source_page=page_number, source_type="text", confidence="high", validation_status="validated", evidence_text=snippet),
+            evidence_object(manual, category="dimensions", field="depth", value=match.group("d"), unit="mm", source_page=page_number, source_type="text", confidence="high", validation_status="validated", evidence_text=snippet),
+        ])
+
+    for page in pages:
+        parsed = parse_visual_case_dimensions(page)
+        if not parsed:
+            continue
+        page_number = int(page["page"])
+        snippet = parsed["snippet"]
+        if parsed.get("width_mm"):
+            objects.append(evidence_object(manual, category="dimensions", field="width", value=parsed["width_mm"], unit="mm", source_page=page_number, source_type="visual-dimension", confidence="medium", validation_status="validated", evidence_text=snippet))
+        if parsed.get("case_front_height_mm"):
+            objects.append(evidence_object(manual, category="dimensions", field="case_front_height", value=parsed["case_front_height_mm"], unit="mm", source_page=page_number, source_type="visual-dimension", confidence="medium", validation_status="validated", evidence_text=snippet))
+        if parsed.get("top_of_case_front_mm"):
+            objects.append(evidence_object(manual, category="dimensions", field="top_of_case_front", value=parsed["top_of_case_front_mm"], unit="mm", source_page=page_number, source_type="visual-dimension", confidence="medium", validation_status="validated", evidence_text=snippet))
+        depth_note = "Depth is not confirmed. A 270 mm annotation is present, but it is not validated as a front-to-back appliance depth."
+        objects.append(evidence_object(manual, category="dimensions", field="depth", value=None, unit="mm", source_page=page_number, source_type="visual-dimension", confidence="medium", validation_status="unconfirmed", evidence_text=snippet, notes=depth_note))
+
+    deduped: dict[str, dict[str, Any]] = {}
+    for item in objects:
+        key = (item["category"], item["field"], item["source_page"], item["source_type"], item["validation_status"])
+        # Prefer explicit text/table dimensions over visual annotations when both exist.
+        if key not in deduped or item["confidence"] == "high":
+            deduped[str(key)] = item
+    return list(deduped.values())
+
+
+def build_evidence_index(manual_id: str, pages: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    manual = get_manual_or_404(manual_id)
+    page_data = pages if pages is not None else load_pages(manual_id)
+    evidence = build_dimension_evidence(manual, page_data)
+    index = {
+        "manual_id": manual_id,
+        "model": manual.get("model"),
+        "variant": manual.get("model"),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "schema_version": "evidence-store-v1",
+        "evidence": evidence,
+        "source_policy": {
+            "generated_images_as_source": False,
+            "allowed_source_images": "original rendered page images, embedded manual images, and cropped/highlighted regions derived from manual pages",
+        },
+    }
+    evidence_index_path(manual_id).write_text(json.dumps(index, indent=2), encoding="utf-8")
+    return index
+
+
+def load_evidence_index(manual_id: str) -> dict[str, Any]:
+    path = evidence_index_path(manual_id)
+    if path.exists():
+        return json.loads(path.read_text(encoding="utf-8"))
+    return build_evidence_index(manual_id)
+
+
+def evidence_for_category(manual_id: str, category: str) -> list[dict[str, Any]]:
+    index = load_evidence_index(manual_id)
+    return [item for item in index.get("evidence", []) if item.get("category") == category]
 
 
 def tokenize(text: str) -> list[str]:
@@ -679,12 +799,119 @@ def deterministic_dimension_answer(manual_id: str, pages: list[dict[str, Any]], 
 
 
 def deterministic_answer(manual_id: str, question: str) -> dict[str, Any] | None:
+    stored = answer_from_evidence_store(manual_id, question)
+    if stored:
+        return stored
     pages = load_pages(manual_id)
     if is_dimension_question(question):
         return deterministic_dimension_answer(manual_id, pages, question)
     if is_visual_question(question):
         return deterministic_visual_answer(manual_id, question)
     return None
+
+
+def evidence_object_to_response(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": item.get("id"),
+        "manual_id": item.get("manual_id"),
+        "page": item.get("source_page"),
+        "snippet": item.get("evidence_text") or item.get("notes") or "",
+        "description": item.get("evidence_text") or item.get("notes") or "",
+        "type": item.get("source_type"),
+        "category": item.get("category"),
+        "field": item.get("field"),
+        "value": item.get("value"),
+        "unit": item.get("unit"),
+        "bbox": item.get("image_region"),
+        "confidence": item.get("confidence"),
+        "validation_status": item.get("validation_status"),
+        "asset_url": item.get("image_url"),
+        "thumbnail_url": item.get("image_url"),
+        "notes": item.get("notes"),
+        "generated": item.get("generated", False),
+    }
+
+
+def answer_from_evidence_store(manual_id: str, question: str) -> dict[str, Any] | None:
+    lowered = question.lower()
+    page_match = re.search(r"\bpage\s+(\d{1,3})\b", lowered)
+    if page_match and any(term in lowered for term in ("show", "open", "image", "page")):
+        page_number = int(page_match.group(1))
+        return {
+            "answer": f"Page {page_number} image is available.",
+            "manual_id": manual_id,
+            "citations": [{"page": page_number, "label": f"Page {page_number}", "url": public_page_image_path(manual_id, page_number)}],
+            "confidence": "high",
+            "evidence": [{
+                "manual_id": manual_id,
+                "page": page_number,
+                "snippet": f"Rendered source page {page_number}",
+                "description": f"Rendered source page {page_number}",
+                "type": "page-image",
+                "confidence": "high",
+                "asset_url": public_page_image_path(manual_id, page_number),
+                "thumbnail_url": public_page_image_path(manual_id, page_number),
+                "generated": False,
+            }],
+            "visual_assets": [{"page": page_number, "url": public_page_image_path(manual_id, page_number), "thumbnail_url": public_page_image_path(manual_id, page_number)}],
+            "evidence_objects": [],
+            "deterministic": True,
+            "source": "page-image",
+        }
+
+    dimension_requested = is_dimension_question(question) or any(term in lowered for term in ("where did that come from", "open the diagram", "show me the page"))
+    if not dimension_requested:
+        return None
+
+    dimension_evidence = evidence_for_category(manual_id, "dimensions")
+    if not dimension_evidence:
+        return None
+
+    validated = [item for item in dimension_evidence if item.get("validation_status") == "validated"]
+    unconfirmed = [item for item in dimension_evidence if item.get("validation_status") == "unconfirmed"]
+    if not validated and not unconfirmed:
+        return None
+
+    by_field: dict[str, dict[str, Any]] = {}
+    for item in validated:
+        current = by_field.get(item["field"])
+        if not current or (current.get("confidence") != "high" and item.get("confidence") == "high"):
+            by_field[item["field"]] = item
+    for item in unconfirmed:
+        by_field.setdefault(item["field"], item)
+
+    answer_lines: list[str] = []
+    if "width" in by_field and by_field["width"].get("value") is not None:
+        answer_lines.append(f"Width: {by_field['width']['value']} {by_field['width'].get('unit') or ''}".strip())
+    if "case_front_height" in by_field:
+        answer_lines.append(f"Case-front height: {by_field['case_front_height']['value']} {by_field['case_front_height'].get('unit') or ''}".strip())
+    elif "height" in by_field and by_field["height"].get("value") is not None:
+        answer_lines.append(f"Height: {by_field['height']['value']} {by_field['height'].get('unit') or ''}".strip())
+    if "top_of_case_front" in by_field:
+        answer_lines.append(f"To top of case front: {by_field['top_of_case_front']['value']} {by_field['top_of_case_front'].get('unit') or ''}".strip())
+    if "depth" in by_field:
+        depth = by_field["depth"]
+        if depth.get("validation_status") == "validated" and depth.get("value") is not None:
+            answer_lines.append(f"Depth: {depth['value']} {depth.get('unit') or ''}".strip())
+        else:
+            answer_lines.append(depth.get("notes") or "Depth: not confirmed.")
+
+    source_pages = sorted({int(item["source_page"]) for item in by_field.values() if item.get("source_page")})
+    if source_pages:
+        answer_lines.append("\nSource: " + ", ".join(f"Page {page}" for page in source_pages))
+
+    response_evidence = [evidence_object_to_response(item) for item in by_field.values()]
+    return {
+        "answer": "\n".join(answer_lines) if answer_lines else "Stored evidence exists, but no answerable dimension fields are validated.",
+        "manual_id": manual_id,
+        "citations": [{"page": page, "label": f"Page {page}"} for page in source_pages],
+        "confidence": "high" if all(item.get("confidence") == "high" for item in by_field.values() if item.get("validation_status") == "validated") else "medium",
+        "evidence": response_evidence,
+        "evidence_objects": list(by_field.values()),
+        "visual_assets": [{"page": page, "url": public_page_image_path(manual_id, page), "thumbnail_url": public_page_image_path(manual_id, page)} for page in source_pages],
+        "deterministic": True,
+        "source": "evidence-store",
+    }
 
 
 def is_visual_question(question: str) -> bool:
@@ -844,6 +1071,12 @@ async def upload_manual(file: UploadFile = File(...)) -> dict[str, Any]:
 @app.get("/manuals/{manual_id}")
 def manual_detail(manual_id: str) -> dict[str, Any]:
     return {"manual": get_manual_or_404(manual_id)}
+
+
+@app.get("/manuals/{manual_id}/evidence")
+def manual_evidence(manual_id: str) -> dict[str, Any]:
+    get_manual_or_404(manual_id)
+    return load_evidence_index(manual_id)
 
 
 @app.post("/manuals/{manual_id}/extract")
