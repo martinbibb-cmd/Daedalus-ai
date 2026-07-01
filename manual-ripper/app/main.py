@@ -436,7 +436,7 @@ def build_dimension_evidence(manual: dict[str, Any], pages: list[dict[str, Any]]
             objects.append(evidence_object(manual, category="dimensions", field="case_front_height", value=parsed["case_front_height_mm"], unit="mm", source_page=page_number, source_type="visual-dimension", confidence="medium", validation_status="validated", evidence_text=snippet))
         if parsed.get("top_of_case_front_mm"):
             objects.append(evidence_object(manual, category="dimensions", field="top_of_case_front", value=parsed["top_of_case_front_mm"], unit="mm", source_page=page_number, source_type="visual-dimension", confidence="medium", validation_status="validated", evidence_text=snippet))
-        depth_note = "Depth is not confirmed. A 270 mm annotation is present, but it is not validated as a front-to-back appliance depth."
+        depth_note = "Depth: not confirmed. A 270 mm annotation is present, but it is not validated as a front-to-back appliance depth."
         objects.append(evidence_object(manual, category="dimensions", field="depth", value=None, unit="mm", source_page=page_number, source_type="visual-dimension", confidence="medium", validation_status="unconfirmed", evidence_text=snippet, notes=depth_note))
 
     deduped: dict[str, dict[str, Any]] = {}
@@ -879,6 +879,14 @@ def answer_from_evidence_store(manual_id: str, question: str) -> dict[str, Any] 
             by_field[item["field"]] = item
     for item in unconfirmed:
         by_field.setdefault(item["field"], item)
+
+    high_text_dimensions = {
+        item["field"]: item
+        for item in validated
+        if item.get("source_type") == "text" and item.get("confidence") == "high" and item.get("field") in {"height", "width", "depth"}
+    }
+    if {"height", "width", "depth"}.issubset(high_text_dimensions):
+        by_field = high_text_dimensions
 
     answer_lines: list[str] = []
     if "width" in by_field and by_field["width"].get("value") is not None:
