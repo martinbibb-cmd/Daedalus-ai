@@ -45,8 +45,9 @@ DETERMINISTIC_TOPICS = {
     "flue": ["flue", "terminal", "plume", "maximum flue"],
     "fault": ["fault code", "fault codes", "error code", "diagnostic"],
     "pressure": ["pressure", "bar", "water pressure", "gas pressure"],
+    "frost": ["frost", "frost protection", "frost function", "low temperature"],
 }
-VISUAL_INTENT_TERMS = ("show me", "show", "diagram", "exploded", "image", "picture", "where is", "give me the page", "what page", "open")
+VISUAL_INTENT_TERMS = ("show me", "show", "diagram", "exploded", "image", "picture", "where is", "give me the page", "what page", "open", "table")
 
 
 class QueryRequest(BaseModel):
@@ -393,6 +394,12 @@ def search_pages(query: str, manual_id: str | None = None, limit: int = 10) -> l
             lowered = text.lower()
             score = sum(lowered.count(term) for term in terms)
             score += sum(2 for term in DIMENSION_TERMS if term in lowered and term in " ".join(terms))
+            query_phrase = clean_text(query).lower().strip("?.! ")
+            if len(query_phrase) >= 6 and query_phrase in lowered:
+                score += 8
+            for phrase in re.findall(r"[a-z0-9]+(?:\s+[a-z0-9]+){1,3}", query.lower()):
+                if phrase in lowered:
+                    score += 2
             if score <= 0:
                 continue
             snippet = make_snippet(text, terms)
@@ -505,7 +512,11 @@ def format_dimension_answer(answer: str, page_number: int) -> str:
 
 def deterministic_dimension_answer(manual_id: str, pages: list[dict[str, Any]]) -> dict[str, Any] | None:
     likely_pages = [page for page in pages if likely_dimension_page(page)]
-    for page in likely_pages:
+    fallback_pages = [
+        page for page in likely_pages
+        if not re.search(r"\bcontents\b", page.get("text", "")[:300], re.I)
+    ] or likely_pages
+    for page in fallback_pages:
         answer, snippet = parse_dimension_answer(page.get("text", ""))
         if answer and snippet:
             evidence = [evidence_from_page(manual_id, page, snippet, evidence_type="dimension", confidence="high")]
@@ -517,8 +528,8 @@ def deterministic_dimension_answer(manual_id: str, pages: list[dict[str, Any]]) 
                 "visual_assets": [{"page": page["page"], "url": evidence[0]["asset_url"], "thumbnail_url": evidence[0]["thumbnail_url"]}],
                 "deterministic": True,
             }
-    if likely_pages:
-        page = likely_pages[0]
+    if fallback_pages:
+        page = fallback_pages[0]
         evidence = [evidence_from_page(manual_id, page, make_snippet(page.get("text", ""), tokenize(" ".join(DIMENSION_TERMS))), evidence_type="dimension-candidate", confidence="medium")]
         return {
             "answer": f"Page {page['page']} appears to contain the appliance dimensions, but I could not parse the height/width/depth values reliably from the extracted text. Open the cited page image to read the table directly.",
