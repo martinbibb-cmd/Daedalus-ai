@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import re
@@ -11,6 +12,7 @@ from typing import Any
 import fitz
 import requests
 from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 
@@ -20,7 +22,30 @@ STORAGE_ROOT = Path(os.getenv("MANUAL_RIPPER_STORAGE_ROOT", "/srv/daedalus/manua
 ORIGINALS_DIR = STORAGE_ROOT / "originals"
 EXTRACTED_DIR = STORAGE_ROOT / "extracted"
 INDEXES_DIR = STORAGE_ROOT / "indexes"
+ASSETS_DIR = STORAGE_ROOT / "assets"
 DB_PATH = STORAGE_ROOT / "metadata.sqlite"
+VISUAL_ZOOM = float(os.getenv("MANUAL_RIPPER_RENDER_ZOOM", "1.7"))
+
+DIMENSION_TERMS = [
+    "dimension",
+    "dimensions",
+    "height",
+    "width",
+    "depth",
+    "h x w x d",
+    "hxwxd",
+    "technical data",
+    "appliance dimensions",
+    "overall dimensions",
+]
+DETERMINISTIC_TOPICS = {
+    "clearance": ["clearance", "clearances", "minimum space", "compartment"],
+    "gas_rate": ["gas rate", "gas rates", "gas consumption", "inlet pressure"],
+    "electrical": ["electrical supply", "electricity supply", "230v", "fuse", "wiring"],
+    "flue": ["flue", "terminal", "plume", "maximum flue"],
+    "fault": ["fault code", "fault codes", "error code", "diagnostic"],
+    "pressure": ["pressure", "bar", "water pressure", "gas pressure"],
+}
 
 
 class QueryRequest(BaseModel):
@@ -50,7 +75,7 @@ def db() -> Any:
 
 
 def ensure_storage() -> None:
-    for path in (ORIGINALS_DIR, EXTRACTED_DIR, INDEXES_DIR):
+    for path in (ORIGINALS_DIR, EXTRACTED_DIR, INDEXES_DIR, ASSETS_DIR):
         path.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute(
@@ -98,6 +123,18 @@ def extracted_path(manual_id: str) -> Path:
     return EXTRACTED_DIR / f"{manual_id}.json"
 
 
+def manual_assets_dir(manual_id: str) -> Path:
+    return ASSETS_DIR / manual_id
+
+
+def public_page_image_path(manual_id: str, page: int) -> str:
+    return f"/manuals/{manual_id}/pages/{page}/image"
+
+
+def public_asset_path(manual_id: str, asset_id: str) -> str:
+    return f"/manuals/{manual_id}/assets/{asset_id}"
+
+
 def get_manual_or_404(manual_id: str) -> dict[str, Any]:
     with db() as conn:
         row = conn.execute("SELECT * FROM manuals WHERE id = ?", (manual_id,)).fetchone()
@@ -138,6 +175,118 @@ def infer_metadata(filename: str, pages: list[dict[str, Any]]) -> dict[str, str 
     }
 
 
+def clean_text(value: str) -> str:
+    return " ".join((value or "").replace("\x00", " ").split())
+
+
+def render_page_assets(manual_id: str, page: fitz.Page, page_number: int) -> dict[str, Any]:
+    assets_dir = manual_assets_dir(manual_id)
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    matrix = fitz.Matrix(VISUAL_ZOOM, VISUAL_ZOOM)
+    pixmap = page.get_pixmap(matrix=matrix, alpha=False)
+    page_asset_id = f"page-{page_number}.png"
+    thumb_asset_id = f"page-{page_number}-thumb.png"
+    page_path = assets_dir / page_asset_id
+    thumb_path = assets_dir / thumb_asset_id
+    pixmap.save(page_path)
+
+    thumb = fitz.Pixmap(pixmap)
+    if thumb.width > 360:
+      # PyMuPDF has no in-place thumbnail; render smaller for stable previews.
+        thumb_pixmap = page.get_pixmap(matrix=fitz.Matrix(0.55, 0.55), alpha=False)
+        thumb_pixmap.save(thumb_path)
+    else:
+        pixmap.save(thumb_path)
+
+    return {
+        "image_asset_id": page_asset_id,
+        "image_url": public_page_image_path(manual_id, page_number),
+        "thumbnail_asset_id": thumb_asset_id,
+        "thumbnail_url": public_asset_path(manual_id, thumb_asset_id),
+        "width": pixmap.width,
+        "height": pixmap.height,
+    }
+
+
+def extract_layout_blocks(page: fitz.Page) -> list[dict[str, Any]]:
+    layout = page.get_text("dict")
+    blocks: list[dict[str, Any]] = []
+    for block in layout.get("blocks", []):
+        if block.get("type") != 0:
+            continue
+        lines: list[str] = []
+        for line in block.get("lines", []):
+            spans = [span.get("text", "") for span in line.get("spans", [])]
+            text = clean_text(" ".join(spans))
+            if text:
+                lines.append(text)
+        block_text = clean_text(" ".join(lines))
+        if block_text:
+            blocks.append({
+                "type": "text",
+                "text": block_text,
+                "bbox": [round(float(v), 2) for v in block.get("bbox", [])],
+            })
+    return blocks
+
+
+def extract_table_candidates(text: str) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    for line in text.splitlines():
+        cleaned = clean_text(line)
+        if not cleaned:
+            continue
+        has_value = bool(re.search(r"\b\d+(?:\.\d+)?\s?(?:mm|cm|m|kw|bar|v|hz|kg|mbar|a)\b", cleaned, re.I))
+        has_columns = bool(re.search(r"\S\s{2,}\S|\S\t+\S", line))
+        if has_value and (has_columns or re.search(r":|-", cleaned)):
+            candidates.append({"type": "table-row", "text": cleaned, "confidence": "medium"})
+    return candidates[:80]
+
+
+def extract_key_values(text: str) -> list[dict[str, Any]]:
+    values: list[dict[str, Any]] = []
+    for line in text.splitlines():
+        cleaned = clean_text(line)
+        match = re.match(r"(?P<key>[A-Za-z][A-Za-z0-9 /().-]{2,60})\s*(?::|-)\s*(?P<value>.+)", cleaned)
+        if match and re.search(r"\d", match.group("value")):
+            values.append({
+                "key": clean_text(match.group("key")),
+                "value": clean_text(match.group("value")),
+                "confidence": "medium",
+            })
+    return values[:100]
+
+
+def extract_embedded_images(manual_id: str, doc: fitz.Document, page: fitz.Page, page_number: int) -> list[dict[str, Any]]:
+    assets: list[dict[str, Any]] = []
+    assets_dir = manual_assets_dir(manual_id)
+    seen: set[int] = set()
+    for image_index, image in enumerate(page.get_images(full=True), start=1):
+        xref = image[0]
+        if xref in seen:
+            continue
+        seen.add(xref)
+        try:
+            extracted = doc.extract_image(xref)
+        except Exception:
+            continue
+        image_bytes = extracted.get("image")
+        ext = extracted.get("ext") or "bin"
+        if not image_bytes:
+            continue
+        digest = hashlib.sha1(image_bytes).hexdigest()[:12]
+        asset_id = f"page-{page_number}-image-{image_index}-{digest}.{ext}"
+        (assets_dir / asset_id).write_bytes(image_bytes)
+        assets.append({
+            "asset_id": asset_id,
+            "type": "embedded-image",
+            "page": page_number,
+            "url": public_asset_path(manual_id, asset_id),
+            "confidence": "medium",
+        })
+    return assets
+
+
 def extract_pdf(manual_id: str) -> dict[str, Any]:
     manual = get_manual_or_404(manual_id)
     path = original_path(manual_id)
@@ -149,7 +298,20 @@ def extract_pdf(manual_id: str) -> dict[str, Any]:
         with fitz.open(path) as doc:
             for index, page in enumerate(doc, start=1):
                 text = page.get_text("text").strip()
-                pages.append({"page": index, "text": text})
+                page_assets = render_page_assets(manual_id, page, index)
+                layout_blocks = extract_layout_blocks(page)
+                embedded_images = extract_embedded_images(manual_id, doc, page, index)
+                pages.append({
+                    "page": index,
+                    "text": text,
+                    "layout_blocks": layout_blocks,
+                    "tables": extract_table_candidates(text),
+                    "key_values": extract_key_values(text),
+                    "assets": {
+                        **page_assets,
+                        "embedded_images": embedded_images,
+                    },
+                })
     except Exception as error:
         with db() as conn:
             conn.execute("UPDATE manuals SET extraction_status = ?, notes = ? WHERE id = ?", ("failed", str(error), manual_id))
@@ -195,8 +357,19 @@ def tokenize(text: str) -> list[str]:
     return [token for token in re.findall(r"[a-z0-9]{3,}", text.lower()) if token not in {"the", "and", "for", "with", "that", "this"}]
 
 
-def search_pages(query: str, manual_id: str | None = None, limit: int = 10) -> list[dict[str, Any]]:
+def query_terms(query: str) -> list[str]:
     terms = tokenize(query)
+    lowered = query.lower()
+    if any(term in lowered for term in ("dimension", "dimensions", "size", "height", "width", "depth", "h x w", "hxw")):
+        terms.extend(tokenize(" ".join(DIMENSION_TERMS)))
+    for topic_terms in DETERMINISTIC_TOPICS.values():
+        if any(term in lowered for term in topic_terms):
+            terms.extend(tokenize(" ".join(topic_terms)))
+    return list(dict.fromkeys(terms))
+
+
+def search_pages(query: str, manual_id: str | None = None, limit: int = 10) -> list[dict[str, Any]]:
+    terms = query_terms(query)
     if not terms:
         return []
 
@@ -218,16 +391,23 @@ def search_pages(query: str, manual_id: str | None = None, limit: int = 10) -> l
             text = page.get("text", "")
             lowered = text.lower()
             score = sum(lowered.count(term) for term in terms)
+            score += sum(2 for term in DIMENSION_TERMS if term in lowered and term in " ".join(terms))
             if score <= 0:
                 continue
             snippet = make_snippet(text, terms)
+            page_number = int(page["page"])
             results.append({
                 "manual_id": manual["id"],
                 "manual": display_manual_name(manual),
-                "page": page["page"],
+                "page": page_number,
                 "snippet": snippet,
+                "description": snippet,
+                "type": "page-text",
+                "bbox": None,
                 "score": score,
                 "confidence": confidence_for_score(score),
+                "asset_url": public_page_image_path(manual["id"], page_number),
+                "thumbnail_url": page.get("assets", {}).get("thumbnail_url"),
             })
 
     results.sort(key=lambda item: item["score"], reverse=True)
@@ -254,6 +434,95 @@ def display_manual_name(manual: dict[str, Any]) -> str:
     parts = [manual.get("manufacturer"), manual.get("model")]
     name = " ".join(part for part in parts if part)
     return name or manual["filename"]
+
+
+def evidence_from_page(manual_id: str, page: dict[str, Any], snippet: str, evidence_type: str = "page-text", confidence: str = "high", bbox: list[float] | None = None) -> dict[str, Any]:
+    page_number = int(page["page"])
+    assets = page.get("assets", {})
+    return {
+        "manual_id": manual_id,
+        "page": page_number,
+        "snippet": clean_text(snippet),
+        "description": clean_text(snippet),
+        "type": evidence_type,
+        "bbox": bbox,
+        "confidence": confidence,
+        "asset_url": public_page_image_path(manual_id, page_number),
+        "thumbnail_url": assets.get("thumbnail_url") or public_asset_path(manual_id, f"page-{page_number}-thumb.png"),
+    }
+
+
+def is_dimension_question(question: str) -> bool:
+    lowered = question.lower()
+    return any(term in lowered for term in ("dimension", "dimensions", "size", "height", "width", "depth", "h x w", "hxw"))
+
+
+def likely_dimension_page(page: dict[str, Any]) -> bool:
+    lowered = page.get("text", "").lower()
+    return any(term in lowered for term in DIMENSION_TERMS) or bool(re.search(r"\b(height|width|depth)\b", lowered))
+
+
+def parse_dimension_answer(text: str) -> tuple[str | None, str | None]:
+    compact = clean_text(text)
+    patterns = [
+        re.compile(r"(?:h(?:eight)?\s*[x/]\s*w(?:idth)?\s*[x/]\s*d(?:epth)?|height\s+width\s+depth|dimensions?)\D{0,80}(?P<h>\d{3,4})\s*(?:mm)?\D{1,30}(?P<w>\d{3,4})\s*(?:mm)?\D{1,30}(?P<d>\d{2,4})\s*(?:mm)?", re.I),
+        re.compile(r"(?P<h>\d{3,4})\s*(?:mm)?\s*[xX]\s*(?P<w>\d{3,4})\s*(?:mm)?\s*[xX]\s*(?P<d>\d{2,4})\s*(?:mm)?", re.I),
+    ]
+    for pattern in patterns:
+        match = pattern.search(compact)
+        if match:
+            h, w, d = match.group("h"), match.group("w"), match.group("d")
+            snippet_start = max(0, match.start() - 90)
+            snippet_end = min(len(compact), match.end() + 90)
+            return f"H {h} mm x W {w} mm x D {d} mm", compact[snippet_start:snippet_end]
+
+    labelled: dict[str, str] = {}
+    for label in ("height", "width", "depth"):
+        match = re.search(rf"\b{label}\b\D{{0,40}}(?P<value>\d{{2,4}})\s*mm\b", compact, re.I)
+        if match:
+            labelled[label] = match.group("value")
+    if {"height", "width", "depth"}.issubset(labelled):
+        first = min(compact.lower().find(label) for label in labelled)
+        return (
+            f"H {labelled['height']} mm x W {labelled['width']} mm x D {labelled['depth']} mm",
+            compact[max(0, first - 90): first + 260],
+        )
+    return None, None
+
+
+def deterministic_dimension_answer(manual_id: str, pages: list[dict[str, Any]]) -> dict[str, Any] | None:
+    likely_pages = [page for page in pages if likely_dimension_page(page)]
+    for page in likely_pages:
+        answer, snippet = parse_dimension_answer(page.get("text", ""))
+        if answer and snippet:
+            evidence = [evidence_from_page(manual_id, page, snippet, evidence_type="dimension", confidence="high")]
+            return {
+                "answer": f"The appliance dimensions are {answer}.",
+                "confidence": "high",
+                "citations": [{"page": page["page"], "label": f"Page {page['page']}"}],
+                "evidence": evidence,
+                "visual_assets": [{"page": page["page"], "url": evidence[0]["asset_url"], "thumbnail_url": evidence[0]["thumbnail_url"]}],
+                "deterministic": True,
+            }
+    if likely_pages:
+        page = likely_pages[0]
+        evidence = [evidence_from_page(manual_id, page, make_snippet(page.get("text", ""), tokenize(" ".join(DIMENSION_TERMS))), evidence_type="dimension-candidate", confidence="medium")]
+        return {
+            "answer": f"Page {page['page']} appears to contain the appliance dimensions, but I could not parse the height/width/depth values reliably from the extracted text. Open the cited page image to read the table directly.",
+            "confidence": "medium",
+            "citations": [{"page": page["page"], "label": f"Page {page['page']}"}],
+            "evidence": evidence,
+            "visual_assets": [{"page": page["page"], "url": evidence[0]["asset_url"], "thumbnail_url": evidence[0]["thumbnail_url"]}],
+            "deterministic": True,
+        }
+    return None
+
+
+def deterministic_answer(manual_id: str, question: str) -> dict[str, Any] | None:
+    pages = load_pages(manual_id)
+    if is_dimension_question(question):
+        return deterministic_dimension_answer(manual_id, pages)
+    return None
 
 
 def ask_gateway(question: str, evidence: list[dict[str, Any]]) -> str:
@@ -371,19 +640,59 @@ def extract_manual(manual_id: str) -> dict[str, Any]:
     return {"manual": extract_pdf(manual_id)}
 
 
+@app.get("/manuals/{manual_id}/pages/{page}/image")
+def page_image(manual_id: str, page: int) -> FileResponse:
+    get_manual_or_404(manual_id)
+    if page < 1:
+        raise HTTPException(status_code=404, detail="page image not found")
+    image_path = manual_assets_dir(manual_id) / f"page-{page}.png"
+    if not image_path.exists():
+        extract_pdf(manual_id)
+    if not image_path.exists():
+        raise HTTPException(status_code=404, detail="page image not found")
+    return FileResponse(image_path, media_type="image/png")
+
+
+@app.get("/manuals/{manual_id}/assets/{asset_id}")
+def manual_asset(manual_id: str, asset_id: str) -> FileResponse:
+    get_manual_or_404(manual_id)
+    safe_asset_id = Path(asset_id).name
+    asset_path = manual_assets_dir(manual_id) / safe_asset_id
+    if not asset_path.exists():
+        raise HTTPException(status_code=404, detail="asset not found")
+    media_type = "image/png" if asset_path.suffix.lower() == ".png" else None
+    return FileResponse(asset_path, media_type=media_type)
+
+
 @app.post("/manuals/{manual_id}/query")
 def query_manual(manual_id: str, request: QueryRequest) -> dict[str, Any]:
     get_manual_or_404(manual_id)
+    deterministic = deterministic_answer(manual_id, request.question)
+    if deterministic:
+        return {"manual_id": manual_id, **deterministic}
+
     evidence = search_pages(request.question, manual_id=manual_id, limit=request.limit)
     if not evidence:
-        return {"answer": "No relevant manual evidence was found.", "manual_id": manual_id, "evidence": []}
+        return {
+            "answer": "No relevant manual evidence was found.",
+            "manual_id": manual_id,
+            "citations": [],
+            "confidence": "low",
+            "evidence": [],
+            "visual_assets": [],
+        }
     answer = ask_gateway(request.question, evidence)
+    citations = [{"page": item["page"], "label": f"Page {item['page']}"} for item in evidence]
     return {
         "answer": answer,
         "manual_id": manual_id,
-        "evidence": [
-            {"page": item["page"], "snippet": item["snippet"], "confidence": item["confidence"]}
+        "citations": citations,
+        "confidence": evidence[0]["confidence"] if evidence else "low",
+        "evidence": evidence,
+        "visual_assets": [
+            {"page": item["page"], "url": item.get("asset_url"), "thumbnail_url": item.get("thumbnail_url")}
             for item in evidence
+            if item.get("asset_url")
         ],
     }
 

@@ -1,4 +1,4 @@
-const APP_VERSION = "petllama-v0.3-manual-ripper";
+const APP_VERSION = "hitchhikers-guide-to-boilers-v0.4";
 const DEFAULT_TIMEOUT_MS = 30000;
 
 const MODES = new Set([
@@ -15,7 +15,7 @@ const CHAT_PAGE = `<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Pet Llama</title>
+  <title>Hitchhiker's Guide to Boilers</title>
   <style>
     :root {
       color-scheme: light dark;
@@ -193,6 +193,81 @@ const CHAT_PAGE = `<!doctype html>
       overflow-wrap: anywhere;
     }
 
+    .guide-shell {
+      display: grid;
+      gap: 12px;
+      min-height: 320px;
+      align-content: start;
+      white-space: normal;
+    }
+
+    .chat-turn {
+      display: grid;
+      gap: 8px;
+      padding: 12px;
+      border: 1px solid #d8dde6;
+      border-radius: 8px;
+      background: #ffffff;
+    }
+
+    .chat-turn.user {
+      background: #eef6f3;
+    }
+
+    .turn-meta {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      color: #627083;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .citation-row,
+    .evidence-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .citation {
+      display: inline-flex;
+      align-items: center;
+      min-height: 32px;
+      padding: 0 10px;
+      border-radius: 8px;
+      background: #e8edf2;
+      color: #17202a;
+      text-decoration: none;
+      font-weight: 700;
+    }
+
+    .evidence-thumb {
+      width: 148px;
+      border: 1px solid #d8dde6;
+      border-radius: 8px;
+      overflow: hidden;
+      background: #ffffff;
+      color: inherit;
+      text-decoration: none;
+    }
+
+    .evidence-thumb img {
+      display: block;
+      width: 100%;
+      aspect-ratio: 4 / 5;
+      object-fit: cover;
+      background: #f0f3f6;
+    }
+
+    .evidence-thumb span {
+      display: block;
+      padding: 6px 8px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
     .actions {
       display: flex;
       align-items: center;
@@ -311,6 +386,18 @@ const CHAT_PAGE = `<!doctype html>
       pre {
         background: #10151b;
       }
+
+      .chat-turn,
+      .evidence-thumb {
+        background: #171d25;
+        border-color: #344052;
+      }
+
+      .chat-turn.user,
+      .citation {
+        background: #263241;
+        color: #edf2f7;
+      }
     }
 
     @media (max-width: 860px) {
@@ -343,8 +430,8 @@ const CHAT_PAGE = `<!doctype html>
   <main>
     <header>
       <div>
-        <h1>Pet Llama v0.2</h1>
-        <div class="version">AI Gateway Engineering Console</div>
+        <h1>Hitchhiker's Guide to Boilers</h1>
+        <div class="version">Manual evidence, direct citations, and page images</div>
       </div>
       <button id="refresh-health" class="secondary" type="button">Refresh health</button>
     </header>
@@ -368,7 +455,7 @@ const CHAT_PAGE = `<!doctype html>
               <option value="extract-evidence">Extract Evidence</option>
               <option value="json">JSON</option>
               <option value="self-test">Self Test</option>
-              <option value="manual-ripper">Manual Ripper</option>
+              <option value="manual-ripper" selected>Guide</option>
             </select>
           </label>
           <label>
@@ -392,7 +479,7 @@ const CHAT_PAGE = `<!doctype html>
 
         <label class="panel">
           Prompt
-          <textarea id="prompt" placeholder="Enter prompt, source text, or diagnostic input..."></textarea>
+          <textarea id="prompt" placeholder="Ask about dimensions, clearances, fault codes, flues, gas rates, pressure, or wiring..."></textarea>
         </label>
 
         <label id="schema-panel" class="panel" hidden>
@@ -400,8 +487,8 @@ const CHAT_PAGE = `<!doctype html>
           <textarea id="schema" class="schema-box" placeholder='{"answer":"string","confidence":"low|medium|high"}'></textarea>
         </label>
 
-        <section id="manual-panel" class="panel" hidden>
-          <strong>Manual Ripper</strong>
+        <section id="manual-panel" class="panel">
+          <strong>Manual library</strong>
           <div class="manual-grid">
             <label>
               PDF upload
@@ -419,8 +506,8 @@ const CHAT_PAGE = `<!doctype html>
         </section>
 
         <section class="panel">
-          <strong>Response</strong>
-          <div id="response" class="response">Ready.</div>
+          <strong>Guide</strong>
+          <div id="response" class="response guide-shell">Select or upload a manual, then ask a question.</div>
         </section>
       </div>
 
@@ -461,7 +548,8 @@ const CHAT_PAGE = `<!doctype html>
       workerVersion: "${APP_VERSION}",
       gatewayOrigin: "-",
       defaultModel: "",
-      lastHealth: null
+      lastHealth: null,
+      manualChat: []
     };
 
     const els = {
@@ -551,6 +639,75 @@ const CHAT_PAGE = `<!doctype html>
       }
       if (data.error) return data.error;
       return pretty(data);
+    }
+
+    function appendManualTurn(turn) {
+      state.manualChat.push(turn);
+      renderManualChat();
+    }
+
+    function renderManualChat() {
+      els.response.classList.remove("error-text");
+      els.response.textContent = "";
+      els.response.classList.add("guide-shell");
+      if (!state.manualChat.length) {
+        els.response.textContent = "Select or upload a manual, then ask a question.";
+        return;
+      }
+      for (const turn of state.manualChat) {
+        const node = document.createElement("article");
+        node.className = "chat-turn " + turn.role;
+        const meta = document.createElement("div");
+        meta.className = "turn-meta";
+        meta.append(document.createTextNode(turn.role === "user" ? "You" : "Guide"));
+        if (turn.confidence) {
+          const confidence = document.createElement("span");
+          confidence.textContent = "Confidence: " + turn.confidence;
+          meta.append(confidence);
+        }
+        const body = document.createElement("div");
+        body.textContent = turn.text || "";
+        node.append(meta, body);
+
+        if (Array.isArray(turn.citations) && turn.citations.length) {
+          const citations = document.createElement("div");
+          citations.className = "citation-row";
+          for (const citation of turn.citations) {
+            const link = document.createElement("a");
+            link.className = "citation";
+            link.href = citation.url || citation.asset_url || "#";
+            link.target = "_blank";
+            link.rel = "noopener";
+            link.textContent = citation.label || ("Page " + citation.page);
+            citations.appendChild(link);
+          }
+          node.appendChild(citations);
+        }
+
+        if (Array.isArray(turn.evidence) && turn.evidence.length) {
+          const grid = document.createElement("div");
+          grid.className = "evidence-grid";
+          for (const item of turn.evidence) {
+            const url = item.asset_url || item.url;
+            if (!url) continue;
+            const link = document.createElement("a");
+            link.className = "evidence-thumb";
+            link.href = url;
+            link.target = "_blank";
+            link.rel = "noopener";
+            const img = document.createElement("img");
+            img.alt = "Page " + item.page + " evidence";
+            img.src = item.thumbnail_url || url;
+            const label = document.createElement("span");
+            label.textContent = "Page " + item.page + " - " + (item.type || "evidence");
+            link.append(img, label);
+            grid.appendChild(link);
+          }
+          if (grid.childElementCount) node.appendChild(grid);
+        }
+        els.response.appendChild(node);
+      }
+      els.response.scrollTop = els.response.scrollHeight;
     }
 
     async function loadModels() {
@@ -740,7 +897,9 @@ const CHAT_PAGE = `<!doctype html>
       const request = { question, limit: 5 };
       els.send.disabled = true;
       els.response.classList.remove("error-text");
-      els.response.textContent = "Querying manual evidence...";
+      appendManualTurn({ role: "user", text: question });
+      els.prompt.value = "";
+      appendManualTurn({ role: "assistant", text: "Checking the manual evidence..." });
       els.rawRequest.textContent = pretty({ manual_id: manualId, ...request });
       try {
         const result = await fetch("/manuals/" + encodeURIComponent(manualId) + "/query", {
@@ -752,12 +911,17 @@ const CHAT_PAGE = `<!doctype html>
         els.rawResponse.textContent = pretty(data);
         if (!result.ok) throw new Error(data.error || data.detail || "Manual query failed");
         const evidence = Array.isArray(data.evidence) ? data.evidence : [];
-        els.response.textContent = [
-          data.answer || "No answer returned.",
-          "",
-          "Evidence:",
-          ...evidence.map((item) => "Page " + item.page + " [" + item.confidence + "]: " + item.snippet)
-        ].join("\\n");
+        state.manualChat.pop();
+        appendManualTurn({
+          role: "assistant",
+          text: data.answer || "No answer returned.",
+          confidence: data.confidence,
+          citations: (Array.isArray(data.citations) ? data.citations : []).map((citation) => ({
+            ...citation,
+            url: citation.url || "/manuals/" + encodeURIComponent(manualId) + "/pages/" + encodeURIComponent(citation.page) + "/image"
+          })),
+          evidence
+        });
         updateDiagnostics({
           diagnostics: {
             gatewayUrl: "Manual Ripper",
@@ -767,8 +931,9 @@ const CHAT_PAGE = `<!doctype html>
           }
         });
       } catch (error) {
+        state.manualChat.pop();
         els.response.classList.add("error-text");
-        els.response.textContent = error.message || "Manual Ripper service is unreachable.";
+        appendManualTurn({ role: "assistant", text: error.message || "Manual Ripper service is unreachable.", confidence: "low" });
       } finally {
         els.send.disabled = false;
       }
@@ -794,13 +959,15 @@ const CHAT_PAGE = `<!doctype html>
     els.manualRefresh.addEventListener("click", loadManuals);
     els.clear.addEventListener("click", () => {
       els.prompt.value = "";
-      els.response.textContent = "Ready.";
+      state.manualChat = [];
+      renderManualChat();
       els.trace.textContent = "";
       els.rawRequest.textContent = "{}";
       els.rawResponse.textContent = "{}";
     });
     els.refreshHealth.addEventListener("click", refreshHealth);
 
+    renderManualChat();
     loadModels().then(refreshHealth).then(loadManuals);
     setInterval(refreshHealth, 30000);
   </script>
@@ -860,7 +1027,7 @@ async function handleManualProxy(request, env, url) {
   }
 
   const started = Date.now();
-  const target = buildGatewayUrl(env.MANUAL_RIPPER_BASE_URL, url.pathname);
+  const target = buildGatewayUrl(env.MANUAL_RIPPER_BASE_URL, url.pathname + url.search);
   const headers = {};
   const contentType = request.headers.get("content-type");
   if (contentType) headers["content-type"] = contentType;
@@ -871,6 +1038,18 @@ async function handleManualProxy(request, env, url) {
       headers,
       body: request.method === "GET" || request.method === "HEAD" ? undefined : request.body,
     });
+    const upstreamType = upstream.headers.get("content-type") || "";
+    if (!upstreamType.includes("application/json")) {
+      const responseHeaders = new Headers(upstream.headers);
+      for (const [key, value] of Object.entries(corsHeaders())) {
+        responseHeaders.set(key, value);
+      }
+      responseHeaders.set("cache-control", upstream.ok ? "public, max-age=3600" : "no-store");
+      return new Response(upstream.body, {
+        status: upstream.status,
+        headers: responseHeaders,
+      });
+    }
     const text = await upstream.text();
     const body = parseGatewayBody(text);
     return json({

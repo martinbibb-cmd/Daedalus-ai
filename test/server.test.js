@@ -1,5 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const { buildServer } = require('../src/server');
 
 const config = {
@@ -208,4 +210,18 @@ test('summarise route allows a caller-provided system prompt', async () => {
 
   assert.equal(response.statusCode, 200);
   assert.equal(response.json().summary, 'I am doing well. How can I help?');
+});
+
+test('manual guide UI clears chat input after send', () => {
+  const worker = fs.readFileSync(path.join(__dirname, '..', 'src', 'worker.js'), 'utf8');
+
+  assert.match(worker, /appendManualTurn\(\{ role: "user", text: question \}\);[\s\S]*els\.prompt\.value = "";/);
+});
+
+test('manual guide UI preserves follow-up chat history', () => {
+  const worker = fs.readFileSync(path.join(__dirname, '..', 'src', 'worker.js'), 'utf8');
+
+  assert.match(worker, /manualChat: \[\]/);
+  assert.match(worker, /state\.manualChat\.push\(turn\)/);
+  assert.match(worker, /for \(const turn of state\.manualChat\)/);
 });
