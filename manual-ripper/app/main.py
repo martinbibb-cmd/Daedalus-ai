@@ -491,15 +491,15 @@ def has_valid_dimension_evidence(page: dict[str, Any], question: str) -> bool:
     if parse_dimension_answer(text)[0]:
         return True
 
-    strong_terms = (
-        "appliance dimensions",
-        "appliance measurements",
-        "overall dimensions",
-        "dimensional drawing",
-        "outline drawing",
-        "side view",
+    strong_patterns = (
+        r"\bappliance dimensions\b",
+        r"\bappliance measurements\b",
+        r"\boverall dimensions\b",
+        r"\bdimensional drawing\b",
+        r"\boutline drawing\b",
+        r"\bside view\b",
     )
-    if any(term in lowered for term in strong_terms):
+    if any(re.search(pattern, lowered) for pattern in strong_patterns):
         return True
     if all(term in lowered for term in ("height", "width", "depth")):
         return True

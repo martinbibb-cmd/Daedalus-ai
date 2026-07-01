@@ -91,6 +91,14 @@ def seed_manual_with_invalid_technical_data_dimension_page(manual_id="greenstar-
             "key_values": [],
             "assets": {"thumbnail_url": f"/manuals/{manual_id}/assets/page-22-thumb.png"},
         },
+        {
+            "page": 55,
+            "text": "Fig. 81 Initial location of the clamping plate. Underside view of the clamping plate.",
+            "layout_blocks": [],
+            "tables": [],
+            "key_values": [],
+            "assets": {"thumbnail_url": f"/manuals/{manual_id}/assets/page-55-thumb.png"},
+        },
     ]
     main.extracted_path(manual_id).write_text(json.dumps({"manual_id": manual_id, "pages": pages}), encoding="utf-8")
     with sqlite3.connect(main.DB_PATH) as conn:
@@ -189,3 +197,4 @@ def test_dimension_retrieval_rejects_generic_technical_data_page_without_dimensi
     assert body["evidence"] == []
     assert "technical data pages" in body["answer"].lower()
     assert "page 8" not in json.dumps(body).lower()
+    assert "page 55" not in json.dumps(body).lower()
