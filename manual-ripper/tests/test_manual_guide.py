@@ -68,6 +68,51 @@ def seed_manual(manual_id="greenstar-ri"):
     return manual_id
 
 
+def seed_manual_with_invalid_technical_data_dimension_page(manual_id="greenstar-ri-page8"):
+    pages = [
+        {
+            "page": 8,
+            "text": (
+                "APPLIANCE INFORMATION 3.2 TECHNICAL DATA Natural Gas Appliances. "
+                "Gas flow rate. Central Heating. Maximum rated heat output. "
+                "Maximum flow temperature. Maximum permissible operating pressure. "
+                "Packaged appliance weight 31 kg. Total appliance weight 27.4 kg."
+            ),
+            "layout_blocks": [],
+            "tables": [],
+            "key_values": [],
+            "assets": {"thumbnail_url": f"/manuals/{manual_id}/assets/page-8-thumb.png"},
+        },
+        {
+            "page": 22,
+            "text": "Pipe work dimensions. Gas 55mm. Condensate 210mm. Flow 285mm. Return 350mm.",
+            "layout_blocks": [],
+            "tables": [],
+            "key_values": [],
+            "assets": {"thumbnail_url": f"/manuals/{manual_id}/assets/page-22-thumb.png"},
+        },
+    ]
+    main.extracted_path(manual_id).write_text(json.dumps({"manual_id": manual_id, "pages": pages}), encoding="utf-8")
+    with sqlite3.connect(main.DB_PATH) as conn:
+        conn.execute(
+            """
+            INSERT INTO manuals (id, filename, manufacturer, model, appliance_type, uploaded_at, page_count, extraction_status, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
+            """,
+            (
+                manual_id,
+                "greenstar-ri-erp.pdf",
+                "Worcester",
+                "Greenstar Ri ErP",
+                "boiler",
+                datetime.now(timezone.utc).isoformat(),
+                2,
+                "complete",
+            ),
+        )
+    return manual_id
+
+
 def test_greenstar_ri_erp_dimensions_are_answered_with_visual_evidence(tmp_path, monkeypatch):
     configure_storage(tmp_path, monkeypatch)
     manual_id = seed_manual()
@@ -128,3 +173,19 @@ def test_visual_question_returns_page_image_without_llm_denial(tmp_path, monkeyp
     assert "not explicitly" not in body["answer"].lower()
     assert body["evidence"][0]["type"] == "page-image"
     assert body["evidence"][0]["asset_url"] == f"/manuals/{manual_id}/pages/12/image"
+
+
+def test_dimension_retrieval_rejects_generic_technical_data_page_without_dimensions(tmp_path, monkeypatch):
+    configure_storage(tmp_path, monkeypatch)
+    manual_id = seed_manual_with_invalid_technical_data_dimension_page()
+    client = TestClient(main.app)
+
+    response = client.post(f"/manuals/{manual_id}/query", json={"question": "What are the appliance dimensions?", "limit": 5})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["confidence"] == "low"
+    assert body["citations"] == []
+    assert body["evidence"] == []
+    assert "technical data pages" in body["answer"].lower()
+    assert "page 8" not in json.dumps(body).lower()

@@ -34,9 +34,13 @@ DIMENSION_TERMS = [
     "depth",
     "h x w x d",
     "hxwxd",
-    "technical data",
     "appliance dimensions",
+    "appliance measurements",
+    "installation dimensions",
     "overall dimensions",
+    "dimensional drawing",
+    "outline drawing",
+    "side view",
 ]
 DETERMINISTIC_TOPICS = {
     "clearance": ["clearance", "clearances", "minimum space", "compartment"],
@@ -470,6 +474,41 @@ def likely_dimension_page(page: dict[str, Any]) -> bool:
     return any(term in lowered for term in DIMENSION_TERMS) or bool(re.search(r"\b(height|width|depth)\b", lowered))
 
 
+def is_contents_page(page: dict[str, Any]) -> bool:
+    return bool(re.search(r"\bcontents\b", page.get("text", "")[:300], re.I))
+
+
+def is_appliance_dimension_question(question: str) -> bool:
+    lowered = question.lower()
+    return not any(term in lowered for term in ("pipe", "pipework", "pipe work", "flue", "terminal", "clearance"))
+
+
+def has_valid_dimension_evidence(page: dict[str, Any], question: str) -> bool:
+    text = page.get("text", "")
+    lowered = text.lower()
+    if is_contents_page(page):
+        return False
+    if parse_dimension_answer(text)[0]:
+        return True
+
+    strong_terms = (
+        "appliance dimensions",
+        "appliance measurements",
+        "overall dimensions",
+        "dimensional drawing",
+        "outline drawing",
+        "side view",
+    )
+    if any(term in lowered for term in strong_terms):
+        return True
+    if all(term in lowered for term in ("height", "width", "depth")):
+        return True
+
+    if is_appliance_dimension_question(question):
+        return False
+    return "dimensions" in lowered or "dimension" in lowered
+
+
 def parse_dimension_answer(text: str) -> tuple[str | None, str | None]:
     compact = clean_text(text)
     patterns = [
@@ -510,13 +549,10 @@ def format_dimension_answer(answer: str, page_number: int) -> str:
     )
 
 
-def deterministic_dimension_answer(manual_id: str, pages: list[dict[str, Any]]) -> dict[str, Any] | None:
+def deterministic_dimension_answer(manual_id: str, pages: list[dict[str, Any]], question: str) -> dict[str, Any] | None:
     likely_pages = [page for page in pages if likely_dimension_page(page)]
-    fallback_pages = [
-        page for page in likely_pages
-        if not re.search(r"\bcontents\b", page.get("text", "")[:300], re.I)
-    ] or likely_pages
-    for page in fallback_pages:
+    validated_pages = [page for page in likely_pages if has_valid_dimension_evidence(page, question)]
+    for page in validated_pages:
         answer, snippet = parse_dimension_answer(page.get("text", ""))
         if answer and snippet:
             evidence = [evidence_from_page(manual_id, page, snippet, evidence_type="dimension", confidence="high")]
@@ -528,8 +564,8 @@ def deterministic_dimension_answer(manual_id: str, pages: list[dict[str, Any]]) 
                 "visual_assets": [{"page": page["page"], "url": evidence[0]["asset_url"], "thumbnail_url": evidence[0]["thumbnail_url"]}],
                 "deterministic": True,
             }
-    if fallback_pages:
-        page = fallback_pages[0]
+    if validated_pages:
+        page = validated_pages[0]
         evidence = [evidence_from_page(manual_id, page, make_snippet(page.get("text", ""), tokenize(" ".join(DIMENSION_TERMS))), evidence_type="dimension-candidate", confidence="medium")]
         return {
             "answer": f"Page {page['page']} appears to contain the appliance dimensions, but I could not parse the height/width/depth values reliably from the extracted text. Open the cited page image to read the table directly.",
@@ -539,13 +575,20 @@ def deterministic_dimension_answer(manual_id: str, pages: list[dict[str, Any]]) 
             "visual_assets": [{"page": page["page"], "url": evidence[0]["asset_url"], "thumbnail_url": evidence[0]["thumbnail_url"]}],
             "deterministic": True,
         }
-    return None
+    return {
+        "answer": "I could not find validated appliance dimension evidence in the extracted manual text. I rejected generic technical data pages because they did not contain dimensions, height, width, depth, H x W x D, appliance/overall dimensions, or a dimensional drawing reference.",
+        "confidence": "low",
+        "citations": [],
+        "evidence": [],
+        "visual_assets": [],
+        "deterministic": True,
+    }
 
 
 def deterministic_answer(manual_id: str, question: str) -> dict[str, Any] | None:
     pages = load_pages(manual_id)
     if is_dimension_question(question):
-        return deterministic_dimension_answer(manual_id, pages)
+        return deterministic_dimension_answer(manual_id, pages, question)
     if is_visual_question(question):
         return deterministic_visual_answer(manual_id, question)
     return None
