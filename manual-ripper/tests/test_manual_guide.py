@@ -26,6 +26,21 @@ def configure_storage(tmp_path, monkeypatch):
 def seed_manual(manual_id="greenstar-ri"):
     pages = [
         {
+            "page": 7,
+            "text": (
+                "APPLIANCE INFORMATION 3 APPLIANCE INFORMATION 3.1 APPLIANCE "
+                "Fig. 1 Appliance 390mm 270mm *600mm to top of case front 590mm* "
+                "STANDARD PACKAGE"
+            ),
+            "layout_blocks": [],
+            "tables": [],
+            "key_values": [],
+            "assets": {
+                "thumbnail_url": f"/manuals/{manual_id}/assets/page-7-thumb.png",
+                "embedded_images": [{"asset_id": "page-7-image-1.png", "type": "embedded-image"}],
+            },
+        },
+        {
             "page": 4,
             "text": "Warnings and clearances. Minimum side clearance 5 mm. Keep combustibles away.",
             "layout_blocks": [],
@@ -198,3 +213,24 @@ def test_dimension_retrieval_rejects_generic_technical_data_page_without_dimensi
     assert "technical data pages" in body["answer"].lower()
     assert "page 8" not in json.dumps(body).lower()
     assert "page 55" not in json.dumps(body).lower()
+
+
+def test_greenstar_ri_page_7_visual_fallback_returns_case_size_without_depth_inference(tmp_path, monkeypatch):
+    configure_storage(tmp_path, monkeypatch)
+    manual_id = seed_manual()
+    client = TestClient(main.app)
+
+    response = client.post(f"/manuals/{manual_id}/query", json={"question": "What is the size of the case of this boiler?", "limit": 5})
+
+    assert response.status_code == 200
+    body = response.json()
+    answer = body["answer"].lower()
+    assert body["fallback"] == "visual"
+    assert body["citations"] == [{"page": 7, "label": "Page 7"}]
+    assert body["evidence"][0]["type"] == "visual-dimension"
+    assert "width: 390 mm" in answer
+    assert "case-front height: 590 mm" in answer
+    assert "to top of case front: 600 mm" in answer
+    assert "depth: not confirmed" in answer
+    assert "270 mm annotation" in answer
+    assert "depth: 270 mm" not in answer

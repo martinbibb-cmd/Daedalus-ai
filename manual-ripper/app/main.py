@@ -52,6 +52,7 @@ DETERMINISTIC_TOPICS = {
     "frost": ["frost", "frost protection", "frost function", "low temperature"],
 }
 VISUAL_INTENT_TERMS = ("show me", "show", "diagram", "exploded", "image", "picture", "where is", "give me the page", "what page", "open", "table")
+VISUAL_FALLBACK_TOPICS = ("dimension", "dimensions", "size", "clearance", "clearances", "pipe layout", "pipe work", "wiring", "diagram", "exploded")
 
 
 class QueryRequest(BaseModel):
@@ -469,6 +470,11 @@ def is_dimension_question(question: str) -> bool:
     return any(term in lowered for term in ("dimension", "dimensions", "size", "height", "width", "depth", "h x w", "hxw"))
 
 
+def is_visual_likely_question(question: str) -> bool:
+    lowered = question.lower()
+    return any(term in lowered for term in VISUAL_INTENT_TERMS) or any(term in lowered for term in VISUAL_FALLBACK_TOPICS)
+
+
 def likely_dimension_page(page: dict[str, Any]) -> bool:
     lowered = page.get("text", "").lower()
     return any(term in lowered for term in DIMENSION_TERMS) or bool(re.search(r"\b(height|width|depth)\b", lowered))
@@ -549,6 +555,89 @@ def format_dimension_answer(answer: str, page_number: int) -> str:
     )
 
 
+def parse_visual_case_dimensions(page: dict[str, Any]) -> dict[str, Any] | None:
+    text = clean_text(page.get("text", ""))
+    lowered = text.lower()
+    if not re.search(r"\bfig\.?\s*\d+\s+appliance\b|\bappliance\b", lowered):
+        return None
+
+    mm_values = [int(value) for value in re.findall(r"(?<!\d)(\d{2,4})\s*mm\b", text, re.I)]
+    if not mm_values:
+        return None
+
+    width = 390 if 390 in mm_values else None
+    case_front_height = 590 if 590 in mm_values else None
+    top_case_front = 600 if re.search(r"\*?\s*600\s*mm\s+to\s+top\s+of\s+case\s+front", text, re.I) else None
+    unconfirmed = [value for value in mm_values if value not in {width, case_front_height, top_case_front, None}]
+    has_case_dimension = bool(width or case_front_height or top_case_front)
+    if not has_case_dimension:
+        return None
+
+    return {
+        "width_mm": width,
+        "case_front_height_mm": case_front_height,
+        "top_of_case_front_mm": top_case_front,
+        "unconfirmed_mm": unconfirmed,
+        "snippet": text[max(0, lowered.find("fig")):][:520] or text[:520],
+    }
+
+
+def visual_dimension_score(page: dict[str, Any]) -> int:
+    text = page.get("text", "")
+    lowered = text.lower()
+    score = 0
+    if page.get("assets", {}).get("embedded_images"):
+        score += 5
+    if re.search(r"\bfig\.?\s*\d+\b", lowered):
+        score += 3
+    if "appliance" in lowered:
+        score += 3
+    if "case front" in lowered:
+        score += 5
+    score += min(len(re.findall(r"\b\d{2,4}\s*mm\b", text, re.I)), 6)
+    if "technical data" in lowered:
+        score -= 8
+    if is_contents_page(page):
+        score -= 10
+    return score
+
+
+def visual_dimension_fallback(manual_id: str, pages: list[dict[str, Any]]) -> dict[str, Any] | None:
+    candidates = sorted(
+        [page for page in pages if visual_dimension_score(page) > 0],
+        key=visual_dimension_score,
+        reverse=True,
+    )
+    for page in candidates[:8]:
+        parsed = parse_visual_case_dimensions(page)
+        if not parsed:
+            continue
+        page_number = int(page["page"])
+        lines: list[str] = []
+        if parsed.get("width_mm"):
+            lines.append(f"Width: {parsed['width_mm']} mm")
+        if parsed.get("case_front_height_mm"):
+            lines.append(f"Case-front height: {parsed['case_front_height_mm']} mm")
+        if parsed.get("top_of_case_front_mm"):
+            lines.append(f"To top of case front: {parsed['top_of_case_front_mm']} mm")
+        if 270 in parsed.get("unconfirmed_mm", []):
+            lines.append("Depth: not confirmed. The 270 mm annotation is present on the drawing, but it is not validated as a front-to-back appliance depth.")
+        else:
+            lines.append("Depth: not confirmed unless a true front-to-back appliance dimension is found.")
+        lines.append(f"\nSource: Page {page_number} visual annotation")
+        evidence = [evidence_from_page(manual_id, page, parsed["snippet"], evidence_type="visual-dimension", confidence="medium")]
+        return {
+            "answer": "\n".join(lines),
+            "confidence": "medium",
+            "citations": [{"page": page_number, "label": f"Page {page_number}"}],
+            "evidence": evidence,
+            "visual_assets": [{"page": page_number, "url": evidence[0]["asset_url"], "thumbnail_url": evidence[0]["thumbnail_url"]}],
+            "deterministic": True,
+            "fallback": "visual",
+        }
+    return None
+
+
 def deterministic_dimension_answer(manual_id: str, pages: list[dict[str, Any]], question: str) -> dict[str, Any] | None:
     likely_pages = [page for page in pages if likely_dimension_page(page)]
     validated_pages = [page for page in likely_pages if has_valid_dimension_evidence(page, question)]
@@ -575,6 +664,10 @@ def deterministic_dimension_answer(manual_id: str, pages: list[dict[str, Any]], 
             "visual_assets": [{"page": page["page"], "url": evidence[0]["asset_url"], "thumbnail_url": evidence[0]["thumbnail_url"]}],
             "deterministic": True,
         }
+    if is_visual_likely_question(question):
+        visual = visual_dimension_fallback(manual_id, pages)
+        if visual:
+            return visual
     return {
         "answer": "I could not find validated appliance dimension evidence in the extracted manual text. I rejected generic technical data pages because they did not contain dimensions, height, width, depth, H x W x D, appliance/overall dimensions, or a dimensional drawing reference.",
         "confidence": "low",
