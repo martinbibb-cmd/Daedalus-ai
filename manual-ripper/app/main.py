@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 
-APP_VERSION = "manual-ripper-0.1"
+APP_VERSION = "manual-ripper-0.4-guide"
 MAX_UPLOAD_BYTES = int(os.getenv("MANUAL_RIPPER_MAX_UPLOAD_BYTES", str(30 * 1024 * 1024)))
 STORAGE_ROOT = Path(os.getenv("MANUAL_RIPPER_STORAGE_ROOT", "/srv/daedalus/manuals"))
 ORIGINALS_DIR = STORAGE_ROOT / "originals"
@@ -46,6 +46,7 @@ DETERMINISTIC_TOPICS = {
     "fault": ["fault code", "fault codes", "error code", "diagnostic"],
     "pressure": ["pressure", "bar", "water pressure", "gas pressure"],
 }
+VISUAL_INTENT_TERMS = ("show me", "show", "diagram", "exploded", "image", "picture", "where is", "give me the page", "what page", "open")
 
 
 class QueryRequest(BaseModel):
@@ -407,7 +408,7 @@ def search_pages(query: str, manual_id: str | None = None, limit: int = 10) -> l
                 "score": score,
                 "confidence": confidence_for_score(score),
                 "asset_url": public_page_image_path(manual["id"], page_number),
-                "thumbnail_url": page.get("assets", {}).get("thumbnail_url"),
+                "thumbnail_url": page.get("assets", {}).get("thumbnail_url") or public_page_image_path(manual["id"], page_number),
             })
 
     results.sort(key=lambda item: item["score"], reverse=True)
@@ -448,7 +449,7 @@ def evidence_from_page(manual_id: str, page: dict[str, Any], snippet: str, evide
         "bbox": bbox,
         "confidence": confidence,
         "asset_url": public_page_image_path(manual_id, page_number),
-        "thumbnail_url": assets.get("thumbnail_url") or public_asset_path(manual_id, f"page-{page_number}-thumb.png"),
+        "thumbnail_url": assets.get("thumbnail_url") or public_page_image_path(manual_id, page_number),
     }
 
 
@@ -490,6 +491,18 @@ def parse_dimension_answer(text: str) -> tuple[str | None, str | None]:
     return None, None
 
 
+def format_dimension_answer(answer: str, page_number: int) -> str:
+    match = re.search(r"H\s+(?P<h>\d+(?:\.\d+)?)\s*mm\s+x\s+W\s+(?P<w>\d+(?:\.\d+)?)\s*mm\s+x\s+D\s+(?P<d>\d+(?:\.\d+)?)\s*mm", answer, re.I)
+    if not match:
+        return f"The appliance dimensions are {answer}.\n\nSource: Page {page_number}"
+    return (
+        f"Height: {match.group('h')} mm\n"
+        f"Width: {match.group('w')} mm\n"
+        f"Depth: {match.group('d')} mm\n\n"
+        f"Source: Page {page_number}"
+    )
+
+
 def deterministic_dimension_answer(manual_id: str, pages: list[dict[str, Any]]) -> dict[str, Any] | None:
     likely_pages = [page for page in pages if likely_dimension_page(page)]
     for page in likely_pages:
@@ -497,7 +510,7 @@ def deterministic_dimension_answer(manual_id: str, pages: list[dict[str, Any]]) 
         if answer and snippet:
             evidence = [evidence_from_page(manual_id, page, snippet, evidence_type="dimension", confidence="high")]
             return {
-                "answer": f"The appliance dimensions are {answer}.",
+                "answer": format_dimension_answer(answer, int(page["page"])),
                 "confidence": "high",
                 "citations": [{"page": page["page"], "label": f"Page {page['page']}"}],
                 "evidence": evidence,
@@ -522,7 +535,58 @@ def deterministic_answer(manual_id: str, question: str) -> dict[str, Any] | None
     pages = load_pages(manual_id)
     if is_dimension_question(question):
         return deterministic_dimension_answer(manual_id, pages)
+    if is_visual_question(question):
+        return deterministic_visual_answer(manual_id, question)
     return None
+
+
+def is_visual_question(question: str) -> bool:
+    lowered = question.lower()
+    return any(term in lowered for term in VISUAL_INTENT_TERMS)
+
+
+def page_heading(text: str) -> str:
+    cleaned = clean_text(text)
+    parts = re.split(r"\s{2,}|(?<=\d)\s(?=\d+\.\d\s+[A-Z])", cleaned)
+    first = parts[0] if parts else cleaned[:80]
+    return first[:90] or "manual page"
+
+
+def deterministic_visual_answer(manual_id: str, question: str) -> dict[str, Any] | None:
+    results = search_pages(question, manual_id=manual_id, limit=5)
+    if not results:
+        return None
+
+    top = results[:3]
+    citations = [{"page": item["page"], "label": f"Page {item['page']}"} for item in top]
+    evidence = [
+        {
+            **item,
+            "confidence": item.get("confidence", "medium"),
+            "type": "page-image",
+        }
+        for item in top
+    ]
+    first = top[0]
+    answer = (
+        f"Best match: Page {first['page']}.\n\n"
+        "Open the cited page image to inspect the diagram/table in context. "
+        "I have included the closest matching page evidence rather than asking the LLM to infer from the diagram."
+    )
+    if len(top) > 1:
+        answer += "\n\nOther likely pages: " + ", ".join(f"Page {item['page']}" for item in top[1:])
+    return {
+        "answer": answer,
+        "confidence": first.get("confidence", "medium"),
+        "citations": citations,
+        "evidence": evidence,
+        "visual_assets": [
+            {"page": item["page"], "url": item.get("asset_url"), "thumbnail_url": item.get("thumbnail_url")}
+            for item in top
+            if item.get("asset_url")
+        ],
+        "deterministic": True,
+    }
 
 
 def ask_gateway(question: str, evidence: list[dict[str, Any]]) -> str:

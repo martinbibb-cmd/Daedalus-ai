@@ -77,7 +77,9 @@ def test_greenstar_ri_erp_dimensions_are_answered_with_visual_evidence(tmp_path,
 
     assert response.status_code == 200
     body = response.json()
-    assert "H 600 mm x W 390 mm x D 270 mm" in body["answer"]
+    assert "Height: 600 mm" in body["answer"]
+    assert "Width: 390 mm" in body["answer"]
+    assert "Depth: 270 mm" in body["answer"]
     assert body["confidence"] == "high"
     assert body["citations"] == [{"page": 12, "label": "Page 12"}]
     assert body["evidence"][0]["type"] == "dimension"
@@ -110,3 +112,19 @@ def test_dimension_answer_does_not_dump_unrelated_clearance_warning(tmp_path, mo
     serialized = json.dumps(response.json()).lower()
     assert "minimum side clearance" not in serialized
     assert "combustibles" not in serialized
+
+
+def test_visual_question_returns_page_image_without_llm_denial(tmp_path, monkeypatch):
+    configure_storage(tmp_path, monkeypatch)
+    manual_id = seed_manual()
+    client = TestClient(main.app)
+
+    response = client.post(f"/manuals/{manual_id}/query", json={"question": "Show me the technical data table", "limit": 5})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["deterministic"] is True
+    assert "Best match: Page 12" in body["answer"]
+    assert "not explicitly" not in body["answer"].lower()
+    assert body["evidence"][0]["type"] == "page-image"
+    assert body["evidence"][0]["asset_url"] == f"/manuals/{manual_id}/pages/12/image"
