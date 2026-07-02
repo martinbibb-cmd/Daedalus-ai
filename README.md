@@ -150,7 +150,7 @@ DAEDALUS_LLM_GATEWAY_URL = "https://ai.atlas-phm.uk"
 DAEDALUS_LLM_MODEL = "llama3.2:3b"
 ```
 
-Deploy flow:
+Manual deploy flow:
 
 ```bash
 git pull origin main
@@ -158,11 +158,14 @@ npm install
 npm run deploy
 ```
 
-On the Daedalus VM, you can use the checked-in helper to discard local drift, deploy the latest `main`, and print the live Worker health response:
+Preferred Daedalus VM deploy flow:
 
 ```bash
+cd /home/martin/Daedalus-ai
 bash scripts/deploy-petllama-from-vm.sh
 ```
+
+The helper fast-forwards `main`, runs tests, deploys the Worker, restarts Manual Ripper when the systemd service exists, and prints health plus Depot Notes diagnostics. It requires `CLOUDFLARE_API_TOKEN` to be set in the VM shell.
 
 Avoid exposing this as a public chat command. If an automated admin endpoint is needed later, protect it with a separate admin-only secret and fixed allowlisted actions.
 
