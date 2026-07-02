@@ -502,6 +502,9 @@ const DEPOT_NOTE_HEADINGS = [
   "Installer notes \u2014 disruption",
   "Installer notes \u2014 customer agreed actions",
   "Installer notes \u2014 special customer requirements / planned home improvement work",
+  "Health and safety observations",
+  "Customer summary email",
+  "Suggested follow-up diary entry",
 ];
 
 const DEPOT_NOTES_PAGE = `<!doctype html>

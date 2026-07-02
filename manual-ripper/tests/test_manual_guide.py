@@ -125,6 +125,81 @@ def seed_unrelated_manual(manual_id="shower-pack"):
     return manual_id
 
 
+def seed_part_l_manual(manual_id="part-l"):
+    pages = [
+        {
+            "page": 3,
+            "text": "Approved Documents provide guidance on the Building Regulations 2010 for England.",
+            "layout_blocks": [],
+            "tables": [],
+            "key_values": [],
+            "assets": {"thumbnail_url": f"/manuals/{manual_id}/assets/page-3-thumb.png"},
+        },
+        {
+            "page": 42,
+            "text": "Fig. 46 Replacing outer case. Install the bottom panel carefully and observe regulations.",
+            "layout_blocks": [],
+            "tables": [],
+            "key_values": [],
+            "assets": {"thumbnail_url": f"/manuals/{manual_id}/assets/page-42-thumb.png"},
+        },
+    ]
+    main.extracted_path(manual_id).write_text(json.dumps({"manual_id": manual_id, "pages": pages}), encoding="utf-8")
+    with sqlite3.connect(main.DB_PATH) as conn:
+        conn.execute(
+            """
+            INSERT INTO manuals (id, filename, manufacturer, model, appliance_type, uploaded_at, page_count, extraction_status, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
+            """,
+            (
+                manual_id,
+                "approved-document-l.pdf",
+                "HM Government",
+                "Approved Document L",
+                "building-regulation",
+                datetime.now(timezone.utc).isoformat(),
+                2,
+                "complete",
+            ),
+        )
+    return manual_id
+
+
+def seed_greenstar_15ri_weight_manual(manual_id="greenstar-15ri"):
+    pages = [
+        {
+            "page": 8,
+            "text": "Greenstar 15Ri technical data. Total appliance weight 27.4 kg. Packaged appliance weight 31 kg.",
+            "layout_blocks": [],
+            "tables": [
+                {"type": "table-row", "text": "Total appliance weight 27.4 kg"},
+                {"type": "table-row", "text": "Packaged appliance weight 31 kg"},
+            ],
+            "key_values": [],
+            "assets": {"thumbnail_url": f"/manuals/{manual_id}/assets/page-8-thumb.png"},
+        },
+    ]
+    main.extracted_path(manual_id).write_text(json.dumps({"manual_id": manual_id, "pages": pages}), encoding="utf-8")
+    with sqlite3.connect(main.DB_PATH) as conn:
+        conn.execute(
+            """
+            INSERT INTO manuals (id, filename, manufacturer, model, appliance_type, uploaded_at, page_count, extraction_status, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
+            """,
+            (
+                manual_id,
+                "greenstar-15ri.pdf",
+                "Worcester",
+                "Greenstar 15Ri",
+                "boiler",
+                datetime.now(timezone.utc).isoformat(),
+                1,
+                "complete",
+            ),
+        )
+    return manual_id
+
+
 def seed_manual_with_flue_tables(manual_id="greenstar-ri-flue"):
     pages = [
         {
@@ -511,6 +586,24 @@ def test_global_query_returns_extractive_text_before_llm_for_simple_search(tmp_p
     assert body["citations"][0]["page"] == 3
     assert body["evidence"][0]["type"] == "page-text"
     assert "Page 3 image is available" not in body["answer"]
+
+
+def test_global_15ri_weight_uses_weight_fact_not_part_l_text(tmp_path, monkeypatch):
+    configure_storage(tmp_path, monkeypatch)
+    seed_part_l_manual()
+    seed_greenstar_15ri_weight_manual()
+    client = TestClient(main.app)
+
+    response = client.post("/manuals/query", json={"question": "How heavy is the 15ri?", "limit": 6})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["manual_id"] == "greenstar-15ri"
+    assert body["source"] == "typed-weight-facts"
+    assert "27.4 kg" in body["answer"]
+    assert "Approved Documents" not in body["answer"]
+    assert all(item["category"] == "weight" for item in body["evidence"])
+    assert body["citations"] == [{"page": 8, "label": "Page 8"}]
 
 
 def test_global_ri_width_query_uses_matching_boiler_manual_not_unrelated_docs(tmp_path, monkeypatch):

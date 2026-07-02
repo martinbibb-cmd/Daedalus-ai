@@ -92,6 +92,9 @@ test('depot notes page renders editable section cards instead of one blob', asyn
   assert.match(html, /Depot Notes/);
   assert.match(html, /Safe access at height/);
   assert.match(html, /Installer notes \u2014 boiler\/controls/);
+  assert.match(html, /Health and safety observations/);
+  assert.match(html, /Customer summary email/);
+  assert.match(html, /Suggested follow-up diary entry/);
   assert.match(html, /Copy/);
   assert.match(html, /Request changes to this section/);
   assert.match(html, /Apply change/);

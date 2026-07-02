@@ -56,6 +56,7 @@ DETERMINISTIC_TOPICS = {
     "fault": ["fault code", "fault codes", "error code", "diagnostic"],
     "pressure": ["pressure", "bar", "water pressure", "gas pressure"],
     "frost": ["frost", "frost protection", "frost function", "low temperature"],
+    "weight": ["weight", "heavy", "lift weight", "total appliance weight", "packaged appliance weight"],
 }
 VISUAL_INTENT_TERMS = ("show me", "show", "diagram", "exploded", "image", "picture", "give me the page", "what page", "open", "table")
 VISUAL_FALLBACK_TOPICS = ("dimension", "dimensions", "size", "clearance", "clearances", "pipe layout", "pipe work", "wiring", "diagram", "exploded")
@@ -65,6 +66,7 @@ QUESTION_INTENTS = {
     "terminal_clearance",
     "fault_code",
     "wiring",
+    "weight",
     "generic",
 }
 
@@ -431,6 +433,8 @@ def evidence_object(
 
 def classify_question_intent(question: str) -> str:
     lowered = question.lower()
+    if any(term in lowered for term in ("weight", "heavy", "weigh", "lift weight", "appliance weight")):
+        return "weight"
     if any(term in lowered for term in ("fault code", "fault codes", "error code", "diagnostic code")):
         return "fault_code"
     if any(term in lowered for term in ("wiring", "wire", "electrical connection", "230v", "thermostat")):
@@ -627,6 +631,40 @@ def build_table_fact_evidence(manual: dict[str, Any], pages: list[dict[str, Any]
     return facts
 
 
+def build_weight_evidence(manual: dict[str, Any], pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    objects: list[dict[str, Any]] = []
+    patterns = [
+        ("total_appliance_weight", r"\b(total\s+)?appliance\s+weight\D{0,40}(?P<value>\d+(?:\.\d+)?)\s*kg\b"),
+        ("lift_weight", r"\b(?:lift|lifting)\s+weight\D{0,40}(?P<value>\d+(?:\.\d+)?)\s*kg\b"),
+        ("packaged_appliance_weight", r"\bpackaged\s+appliance\s+weight\D{0,40}(?P<value>\d+(?:\.\d+)?)\s*kg\b"),
+    ]
+    seen: set[tuple[str, int, str]] = set()
+    for page in pages:
+        text = clean_text(page.get("text", ""))
+        page_number = int(page["page"])
+        for field, pattern in patterns:
+            for match in re.finditer(pattern, text, re.I):
+                value = match.group("value")
+                key = (field, page_number, value)
+                if key in seen:
+                    continue
+                seen.add(key)
+                snippet = text[max(0, match.start() - 80): min(len(text), match.end() + 80)]
+                objects.append(evidence_object(
+                    manual,
+                    category="weight",
+                    field=field,
+                    value=value,
+                    unit="kg",
+                    source_page=page_number,
+                    source_type="table-row" if any(field in clean_text(str(row.get("text", ""))).lower().replace(" ", "_") for row in page.get("tables", [])) else "text",
+                    confidence="high",
+                    validation_status="validated",
+                    evidence_text=snippet,
+                ))
+    return objects
+
+
 def structured_fact(item: dict[str, Any]) -> dict[str, Any]:
     fact = {
         "type": item.get("type") or item.get("category"),
@@ -643,6 +681,9 @@ def structured_fact(item: dict[str, Any]) -> dict[str, Any]:
     elif item.get("unit") == "m":
         fact["value_m"] = item.get("value")
         fact["units"] = "m"
+    elif item.get("unit") == "kg":
+        fact["value_kg"] = item.get("value")
+        fact["units"] = "kg"
     else:
         fact["value"] = item.get("value")
         fact["units"] = item.get("unit")
@@ -695,7 +736,8 @@ def build_evidence_index(manual_id: str, pages: list[dict[str, Any]] | None = No
     manual = get_manual_or_404(manual_id)
     page_data = pages if pages is not None else load_pages(manual_id)
     table_facts = build_table_fact_evidence(manual, page_data)
-    evidence = build_dimension_evidence(manual, page_data) + table_facts
+    weight_facts = build_weight_evidence(manual, page_data)
+    evidence = build_dimension_evidence(manual, page_data) + table_facts + weight_facts
     index = {
         "manual_id": manual_id,
         "manual": display_manual_name(manual),
@@ -703,7 +745,7 @@ def build_evidence_index(manual_id: str, pages: list[dict[str, Any]] | None = No
         "variant": manual.get("model"),
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "schema_version": EVIDENCE_SCHEMA_VERSION,
-        "facts": [structured_fact(item) for item in table_facts],
+        "facts": [structured_fact(item) for item in table_facts + weight_facts],
         "evidence": evidence,
         "source_policy": {
             "generated_images_as_source": False,
@@ -769,7 +811,7 @@ def manual_metadata_score(manual: dict[str, Any], terms: list[str]) -> int:
 def specific_manual_terms(query: str) -> list[str]:
     lowered = query.lower()
     terms: list[str] = []
-    if re.search(r"\bri\b", lowered):
+    if re.search(r"\b(?:\d+\s*)?ri\b", lowered):
         terms.append("ri")
     return terms
 
@@ -799,8 +841,13 @@ def no_relevant_manual_answer() -> dict[str, Any]:
 def query_terms(query: str) -> list[str]:
     terms = tokenize(query)
     lowered = query.lower()
-    if re.search(r"\bri\b", lowered):
+    if re.search(r"\b(?:\d+\s*)?ri\b", lowered):
         terms.extend(["ri", "greenstar", "boiler", "appliance"])
+        model_match = re.search(r"\b(\d+)\s*ri\b", lowered)
+        if model_match:
+            terms.extend([model_match.group(1), f"{model_match.group(1)}ri"])
+    if any(term in lowered for term in ("weight", "heavy", "weigh", "lift weight", "appliance weight")):
+        terms.extend(["weight", "heavy", "appliance", "lift", "total"])
     if any(term in lowered for term in ("dimension", "dimensions", "size", "height", "width", "wide", "depth", "h x w", "hxw")):
         terms.extend(tokenize(" ".join(DIMENSION_TERMS)))
         if "wide" in lowered:
@@ -1247,11 +1294,54 @@ def answer_flue_length_from_facts(manual_id: str, question: str) -> dict[str, An
     }
 
 
+def answer_weight_from_facts(manual_id: str, question: str) -> dict[str, Any] | None:
+    facts = [
+        item for item in evidence_for_category(manual_id, "weight")
+        if item.get("validation_status") == "validated"
+    ]
+    if not facts:
+        return None
+    lowered = question.lower()
+    if "pack" in lowered or "boxed" in lowered:
+        priority = ["packaged_appliance_weight", "total_appliance_weight", "lift_weight"]
+    elif "lift" in lowered or "carry" in lowered or "heavy" in lowered:
+        priority = ["lift_weight", "total_appliance_weight", "packaged_appliance_weight"]
+    else:
+        priority = ["total_appliance_weight", "lift_weight", "packaged_appliance_weight"]
+    selected = None
+    for field in priority:
+        selected = next((item for item in facts if item.get("field") == field), None)
+        if selected:
+            break
+    if not selected:
+        selected = facts[0]
+    label = {
+        "total_appliance_weight": "Total appliance weight",
+        "lift_weight": "Lift weight",
+        "packaged_appliance_weight": "Packaged appliance weight",
+    }.get(str(selected.get("field")), "Appliance weight")
+    page = int(selected["source_page"])
+    evidence = [evidence_object_to_response(selected)]
+    return {
+        "answer": f"{label}: {selected['value']} {selected.get('unit') or 'kg'}.\n\nSource: Page {page}, evidence: {selected.get('evidence_text')}",
+        "manual_id": manual_id,
+        "citations": [{"page": page, "label": f"Page {page}"}],
+        "confidence": "high",
+        "evidence": evidence,
+        "evidence_objects": [selected],
+        "visual_assets": [{"page": page, "url": public_page_image_path(manual_id, page), "thumbnail_url": public_page_image_path(manual_id, page)}],
+        "deterministic": True,
+        "source": "typed-weight-facts",
+    }
+
+
 def no_structured_fact_answer(manual_id: str, intent: str) -> dict[str, Any]:
     if intent == "terminal_clearance":
         answer = "I could not find a reliable terminal-clearance table row for that condition. I will not answer terminal clearances from general paragraph text."
     elif intent == "max_flue_length":
         answer = "I could not find a reliable flue-length table row for that question. I will not answer maximum flue length from terminal-position clearance tables."
+    elif intent == "weight":
+        answer = "I could not find a reliable appliance-weight fact in the structured manual data. I will not answer weight from unrelated page text."
     else:
         answer = "I could not find reliable structured manual facts for that question."
     return {
@@ -1298,6 +1388,8 @@ def answer_from_evidence_store(manual_id: str, question: str) -> dict[str, Any] 
         return answer_terminal_clearance_from_facts(manual_id, question) or no_structured_fact_answer(manual_id, intent)
     if intent == "max_flue_length":
         return answer_flue_length_from_facts(manual_id, question) or no_structured_fact_answer(manual_id, intent)
+    if intent == "weight":
+        return answer_weight_from_facts(manual_id, question) or no_structured_fact_answer(manual_id, intent)
 
     dimension_requested = is_dimension_question(question) or any(term in lowered for term in ("where did that come from", "open the diagram", "show me the page"))
     if not dimension_requested:
