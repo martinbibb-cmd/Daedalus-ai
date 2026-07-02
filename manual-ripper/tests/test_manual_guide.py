@@ -123,6 +123,59 @@ def seed_unrelated_manual(manual_id="shower-pack"):
     return manual_id
 
 
+def seed_manual_with_flue_tables(manual_id="greenstar-ri-flue"):
+    pages = [
+        {
+            "page": 20,
+            "text": (
+                "Terminal position clearances table. "
+                "Terminal clearance to an opening, openable window or air vent - 300 mm. "
+                "Terminal clearance to internal or external corner - 150 mm."
+            ),
+            "layout_blocks": [],
+            "tables": [
+                {"type": "table-row", "text": "Terminal clearance to an opening, openable window or air vent - 300 mm"},
+                {"type": "table-row", "text": "Terminal clearance to internal or external corner - 150 mm"},
+            ],
+            "key_values": [],
+            "assets": {"thumbnail_url": f"/manuals/{manual_id}/assets/page-20-thumb.png"},
+        },
+        {
+            "page": 28,
+            "text": (
+                "Flue length table. Maximum horizontal flue length - 10 m. "
+                "90 degree elbow equivalent length reduction - 1 m."
+            ),
+            "layout_blocks": [],
+            "tables": [
+                {"type": "table-row", "text": "Maximum horizontal flue length - 10 m"},
+                {"type": "table-row", "text": "90 degree elbow equivalent length reduction - 1 m"},
+            ],
+            "key_values": [],
+            "assets": {"thumbnail_url": f"/manuals/{manual_id}/assets/page-28-thumb.png"},
+        },
+    ]
+    main.extracted_path(manual_id).write_text(json.dumps({"manual_id": manual_id, "pages": pages}), encoding="utf-8")
+    with sqlite3.connect(main.DB_PATH) as conn:
+        conn.execute(
+            """
+            INSERT INTO manuals (id, filename, manufacturer, model, appliance_type, uploaded_at, page_count, extraction_status, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
+            """,
+            (
+                manual_id,
+                "greenstar-ri-flue.pdf",
+                "Worcester",
+                "Greenstar Ri",
+                "boiler",
+                datetime.now(timezone.utc).isoformat(),
+                2,
+                "complete",
+            ),
+        )
+    return manual_id
+
+
 def seed_manual_with_invalid_technical_data_dimension_page(manual_id="greenstar-ri-page8"):
     pages = [
         {
@@ -446,3 +499,78 @@ def test_global_specific_ri_query_rejects_unrelated_global_results(tmp_path, mon
     assert body["confidence"] == "low"
     assert body["evidence"] == []
     assert body["citations"] == []
+
+
+def test_terminal_clearance_opening_answers_from_matching_table_row(tmp_path, monkeypatch):
+    configure_storage(tmp_path, monkeypatch)
+    manual_id = seed_manual_with_flue_tables()
+    client = TestClient(main.app)
+
+    response = client.post(f"/manuals/{manual_id}/query", json={"question": "What is the terminal clearance to an openable window?", "limit": 5})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["source"] == "typed-table-facts"
+    assert "300 mm" in body["answer"]
+    assert "150 mm" not in body["answer"]
+    assert body["citations"] == [{"page": 20, "label": "Page 20"}]
+    assert body["evidence"][0]["type"] == "terminal_clearance"
+    assert body["evidence"][0]["category"] == "terminal_clearance"
+    assert "openable window" in body["evidence"][0]["field"]
+    index = main.load_evidence_index(manual_id)
+    assert {
+        "type": "terminal_clearance",
+        "condition": "to openable window or air vent",
+        "value_mm": 300,
+        "page": 20,
+    }.items() <= index["facts"][0].items()
+
+
+def test_terminal_clearance_corner_answers_from_matching_table_row(tmp_path, monkeypatch):
+    configure_storage(tmp_path, monkeypatch)
+    manual_id = seed_manual_with_flue_tables()
+    client = TestClient(main.app)
+
+    response = client.post(f"/manuals/{manual_id}/query", json={"question": "What clearance is required to an internal corner?", "limit": 5})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["source"] == "typed-table-facts"
+    assert "150 mm" in body["answer"]
+    assert "300 mm" not in body["answer"]
+    assert body["citations"] == [{"page": 20, "label": "Page 20"}]
+    assert body["evidence"][0]["type"] == "terminal_clearance"
+    assert "internal or external corner" in body["evidence"][0]["field"]
+
+
+def test_terminal_clearance_ambiguous_opening_and_corner_asks_clarification(tmp_path, monkeypatch):
+    configure_storage(tmp_path, monkeypatch)
+    manual_id = seed_manual_with_flue_tables()
+    client = TestClient(main.app)
+
+    response = client.post(f"/manuals/{manual_id}/query", json={"question": "What is the terminal clearance?", "limit": 5})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["source"] == "typed-table-facts"
+    assert body["answer"] == "Do you mean an opening/window or an internal corner?"
+    assert body["evidence"] == []
+
+
+def test_max_flue_length_with_90_elbows_uses_flue_facts_not_clearance_table(tmp_path, monkeypatch):
+    configure_storage(tmp_path, monkeypatch)
+    manual_id = seed_manual_with_flue_tables()
+    client = TestClient(main.app)
+
+    response = client.post(f"/manuals/{manual_id}/query", json={"question": "What is the maximum flue length with 90 degree elbows?", "limit": 5})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["source"] == "typed-table-facts"
+    assert "Maximum flue length: 10" in body["answer"]
+    assert "90 degree elbows reduce" in body["answer"]
+    assert "1" in body["answer"]
+    assert body["citations"] == [{"page": 28, "label": "Page 28"}]
+    assert all(item["category"] == "flue_length" for item in body["evidence"])
+    assert "300 mm" not in body["answer"]
+    assert "150 mm" not in body["answer"]

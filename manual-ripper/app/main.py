@@ -53,6 +53,14 @@ DETERMINISTIC_TOPICS = {
 }
 VISUAL_INTENT_TERMS = ("show me", "show", "diagram", "exploded", "image", "picture", "where is", "give me the page", "what page", "open", "table")
 VISUAL_FALLBACK_TOPICS = ("dimension", "dimensions", "size", "clearance", "clearances", "pipe layout", "pipe work", "wiring", "diagram", "exploded")
+QUESTION_INTENTS = {
+    "dimensions",
+    "max_flue_length",
+    "terminal_clearance",
+    "fault_code",
+    "wiring",
+    "generic",
+}
 
 
 class QueryRequest(BaseModel):
@@ -410,6 +418,183 @@ def evidence_object(
     }
 
 
+def classify_question_intent(question: str) -> str:
+    lowered = question.lower()
+    if any(term in lowered for term in ("fault code", "fault codes", "error code", "diagnostic code")):
+        return "fault_code"
+    if any(term in lowered for term in ("wiring", "wire", "electrical connection", "230v", "thermostat")):
+        return "wiring"
+    if any(term in lowered for term in ("maximum flue length", "max flue length", "flue length", "equivalent length", "90", "elbow")):
+        return "max_flue_length"
+    if "terminal" in lowered and any(term in lowered for term in ("clearance", "position", "distance", "opening", "window", "vent", "corner")):
+        return "terminal_clearance"
+    if any(term in lowered for term in ("clearance", "clearances")) and any(term in lowered for term in ("opening", "window", "vent", "corner", "terminal")):
+        return "terminal_clearance"
+    if is_dimension_question(question):
+        return "dimensions"
+    return "generic"
+
+
+def page_table_rows(page: dict[str, Any]) -> list[str]:
+    rows: list[str] = []
+    for table in page.get("tables", []):
+        text = clean_text(str(table.get("text") or ""))
+        if text:
+            rows.append(text)
+    if rows:
+        return rows
+    for line in page.get("text", "").splitlines():
+        cleaned = clean_text(line)
+        if cleaned and re.search(r"\b\d+(?:\.\d+)?\s?(?:mm|m)\b", cleaned, re.I):
+            rows.append(cleaned)
+    return rows
+
+
+def terminal_condition_from_text(text: str) -> str | None:
+    lowered = text.lower()
+    if any(term in lowered for term in ("opening", "openable", "window", "air vent", "ventilation opening")):
+        return "to openable window or air vent"
+    if "corner" in lowered and ("internal" in lowered or "external" in lowered):
+        return "internal or external corner"
+    return None
+
+
+def requested_terminal_condition(question: str) -> str | None:
+    return terminal_condition_from_text(question)
+
+
+def parse_terminal_clearance_fact(manual: dict[str, Any], page: dict[str, Any], row_text: str) -> dict[str, Any] | None:
+    condition = terminal_condition_from_text(row_text)
+    if not condition:
+        return None
+    if not any(term in row_text.lower() for term in ("terminal", "clearance", "opening", "window", "vent", "corner")):
+        return None
+    match = re.search(r"(?<!\d)(?P<value>\d{2,4})\s*mm\b", row_text, re.I)
+    if not match:
+        return None
+    page_number = int(page["page"])
+    obj = evidence_object(
+        manual,
+        category="terminal_clearance",
+        field=condition,
+        value=int(match.group("value")),
+        unit="mm",
+        source_page=page_number,
+        source_type="table-row",
+        confidence="high",
+        validation_status="validated",
+        evidence_text=row_text,
+    )
+    obj.update({
+        "type": "terminal_clearance",
+        "condition": condition,
+        "value_mm": int(match.group("value")),
+        "units": "mm",
+        "table_reference": f"Page {page_number} terminal clearance table",
+    })
+    return obj
+
+
+def parse_flue_fact(manual: dict[str, Any], page: dict[str, Any], row_text: str) -> dict[str, Any] | None:
+    lowered = row_text.lower()
+    if "flue" not in lowered and "elbow" not in lowered:
+        return None
+    page_number = int(page["page"])
+    elbow_match = re.search(r"\b(?P<angle>45|90)\s*(?:deg|degree|degrees)?\s*elbow\b.*?(?P<value>\d+(?:\.\d+)?)\s*m\b", row_text, re.I)
+    if not elbow_match:
+        elbow_match = re.search(r"\b(?P<value>\d+(?:\.\d+)?)\s*m\b.*?\b(?P<angle>45|90)\s*(?:deg|degree|degrees)?\s*elbow\b", row_text, re.I)
+    if elbow_match and any(term in lowered for term in ("equivalent", "deduct", "reduce", "reduction", "allowance", "de-rating", "derating")):
+        angle = int(elbow_match.group("angle"))
+        value = float(elbow_match.group("value"))
+        obj = evidence_object(
+            manual,
+            category="flue_length",
+            field=f"{angle}_degree_elbow_equivalent_length",
+            value=value,
+            unit="m",
+            source_page=page_number,
+            source_type="table-row",
+            confidence="high",
+            validation_status="validated",
+            evidence_text=row_text,
+        )
+        obj.update({
+            "type": "flue_elbow_equivalent",
+            "condition": f"{angle} degree elbow equivalent length",
+            "value_m": value,
+            "units": "m",
+            "table_reference": f"Page {page_number} flue length table",
+        })
+        return obj
+
+    if "clearance" in lowered or "terminal position" in lowered or re.search(r"\b(window|opening|corner|boundary)\b", lowered):
+        return None
+    if not any(term in lowered for term in ("maximum", "max", "length")):
+        return None
+    length_match = re.search(r"(?P<value>\d+(?:\.\d+)?)\s*m\b", row_text, re.I)
+    if not length_match:
+        return None
+    value = float(length_match.group("value"))
+    obj = evidence_object(
+        manual,
+        category="flue_length",
+        field="maximum_flue_length",
+        value=value,
+        unit="m",
+        source_page=page_number,
+        source_type="table-row",
+        confidence="high",
+        validation_status="validated",
+        evidence_text=row_text,
+    )
+    obj.update({
+        "type": "max_flue_length",
+        "condition": "maximum flue length",
+        "value_m": value,
+        "units": "m",
+        "table_reference": f"Page {page_number} flue length table",
+    })
+    return obj
+
+
+def build_table_fact_evidence(manual: dict[str, Any], pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    facts: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, int, str]] = set()
+    for page in pages:
+        for row in page_table_rows(page):
+            for fact in (parse_terminal_clearance_fact(manual, page, row), parse_flue_fact(manual, page, row)):
+                if not fact:
+                    continue
+                key = (fact["category"], fact["field"], int(fact["source_page"]), fact["evidence_text"].lower())
+                if key in seen:
+                    continue
+                seen.add(key)
+                facts.append(fact)
+    return facts
+
+
+def structured_fact(item: dict[str, Any]) -> dict[str, Any]:
+    fact = {
+        "type": item.get("type") or item.get("category"),
+        "condition": item.get("condition") or item.get("field"),
+        "page": item.get("source_page"),
+        "table_reference": item.get("table_reference"),
+        "evidence_text": item.get("evidence_text"),
+        "bbox": item.get("bbox"),
+        "confidence": item.get("confidence"),
+    }
+    if item.get("unit") == "mm":
+        fact["value_mm"] = item.get("value")
+        fact["units"] = "mm"
+    elif item.get("unit") == "m":
+        fact["value_m"] = item.get("value")
+        fact["units"] = "m"
+    else:
+        fact["value"] = item.get("value")
+        fact["units"] = item.get("unit")
+    return fact
+
+
 def build_dimension_evidence(manual: dict[str, Any], pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     objects: list[dict[str, Any]] = []
     for page in pages:
@@ -455,13 +640,16 @@ def build_dimension_evidence(manual: dict[str, Any], pages: list[dict[str, Any]]
 def build_evidence_index(manual_id: str, pages: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     manual = get_manual_or_404(manual_id)
     page_data = pages if pages is not None else load_pages(manual_id)
-    evidence = build_dimension_evidence(manual, page_data)
+    table_facts = build_table_fact_evidence(manual, page_data)
+    evidence = build_dimension_evidence(manual, page_data) + table_facts
     index = {
         "manual_id": manual_id,
+        "manual": display_manual_name(manual),
         "model": manual.get("model"),
         "variant": manual.get("model"),
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "schema_version": "evidence-store-v1",
+        "facts": [structured_fact(item) for item in table_facts],
         "evidence": evidence,
         "source_policy": {
             "generated_images_as_source": False,
@@ -880,7 +1068,7 @@ def deterministic_answer(manual_id: str, question: str) -> dict[str, Any] | None
 
 
 def evidence_object_to_response(item: dict[str, Any]) -> dict[str, Any]:
-    response_type = item.get("source_type")
+    response_type = item.get("type") or item.get("source_type")
     if item.get("category") == "dimensions" and response_type == "text":
         response_type = "dimension"
     return {
@@ -902,6 +1090,116 @@ def evidence_object_to_response(item: dict[str, Any]) -> dict[str, Any]:
         "thumbnail_url": item.get("image_url"),
         "notes": item.get("notes"),
         "generated": item.get("generated", False),
+    }
+
+
+def answer_terminal_clearance_from_facts(manual_id: str, question: str) -> dict[str, Any] | None:
+    facts = [
+        item for item in evidence_for_category(manual_id, "terminal_clearance")
+        if item.get("validation_status") == "validated" and item.get("source_type") == "table-row"
+    ]
+    if not facts:
+        return None
+
+    requested = requested_terminal_condition(question)
+    available = {str(item.get("condition") or item.get("field")) for item in facts}
+    if not requested:
+        if {"to openable window or air vent", "internal or external corner"}.issubset(available):
+            return {
+                "answer": "Do you mean an opening/window or an internal corner?",
+                "manual_id": manual_id,
+                "citations": [],
+                "confidence": "low",
+                "evidence": [],
+                "visual_assets": [],
+                "deterministic": True,
+                "source": "typed-table-facts",
+            }
+        return None
+
+    matches = [item for item in facts if (item.get("condition") or item.get("field")) == requested]
+    if not matches:
+        return None
+    fact = matches[0]
+    page = int(fact["source_page"])
+    evidence = [evidence_object_to_response(fact)]
+    return {
+        "answer": f"Terminal clearance {requested}: {fact['value']} {fact.get('unit') or 'mm'}.\n\nSource: Page {page}, table row: {fact.get('evidence_text')}",
+        "manual_id": manual_id,
+        "citations": [{"page": page, "label": f"Page {page}"}],
+        "confidence": "high",
+        "evidence": evidence,
+        "evidence_objects": [fact],
+        "visual_assets": [{"page": page, "url": public_page_image_path(manual_id, page), "thumbnail_url": public_page_image_path(manual_id, page)}],
+        "deterministic": True,
+        "source": "typed-table-facts",
+    }
+
+
+def answer_flue_length_from_facts(manual_id: str, question: str) -> dict[str, Any] | None:
+    facts = [
+        item for item in evidence_for_category(manual_id, "flue_length")
+        if item.get("validation_status") == "validated" and item.get("source_type") == "table-row"
+    ]
+    if not facts:
+        return None
+
+    lowered = question.lower()
+    max_facts = [item for item in facts if item.get("type") == "max_flue_length"]
+    elbow_facts = [item for item in facts if item.get("type") == "flue_elbow_equivalent"]
+    if not max_facts and not elbow_facts:
+        return None
+
+    selected = []
+    lines: list[str] = []
+    if max_facts:
+        fact = max_facts[0]
+        selected.append(fact)
+        lines.append(f"Maximum flue length: {fact['value']} {fact.get('unit') or 'm'}.")
+    if "elbow" in lowered or "90" in lowered:
+        ninety = [item for item in elbow_facts if "90" in str(item.get("field") or item.get("condition") or "")]
+        if ninety:
+            fact = ninety[0]
+            selected.append(fact)
+            lines.append(f"90 degree elbows reduce the available straight flue length by {fact['value']} {fact.get('unit') or 'm'} per elbow/equivalent-length allowance.")
+        else:
+            lines.append("I found the flue length row, but no reliable 90 degree elbow equivalent-length row in the structured table facts.")
+    if not lines:
+        return None
+
+    pages = sorted({int(item["source_page"]) for item in selected})
+    if pages:
+        lines.append("\nSource: " + ", ".join(f"Page {page}" for page in pages))
+    evidence = [evidence_object_to_response(item) for item in selected]
+    return {
+        "answer": "\n".join(lines),
+        "manual_id": manual_id,
+        "citations": [{"page": page, "label": f"Page {page}"} for page in pages],
+        "confidence": "high" if selected else "medium",
+        "evidence": evidence,
+        "evidence_objects": selected,
+        "visual_assets": [{"page": page, "url": public_page_image_path(manual_id, page), "thumbnail_url": public_page_image_path(manual_id, page)} for page in pages],
+        "deterministic": True,
+        "source": "typed-table-facts",
+    }
+
+
+def no_structured_fact_answer(manual_id: str, intent: str) -> dict[str, Any]:
+    if intent == "terminal_clearance":
+        answer = "I could not find a reliable terminal-clearance table row for that condition. I will not answer terminal clearances from general paragraph text."
+    elif intent == "max_flue_length":
+        answer = "I could not find a reliable flue-length table row for that question. I will not answer maximum flue length from terminal-position clearance tables."
+    else:
+        answer = "I could not find reliable structured manual facts for that question."
+    return {
+        "answer": answer,
+        "manual_id": manual_id,
+        "citations": [],
+        "confidence": "low",
+        "evidence": [],
+        "visual_assets": [],
+        "deterministic": True,
+        "source": "typed-table-facts",
     }
 
 
@@ -931,6 +1229,12 @@ def answer_from_evidence_store(manual_id: str, question: str) -> dict[str, Any] 
             "deterministic": True,
             "source": "page-image",
         }
+
+    intent = classify_question_intent(question)
+    if intent == "terminal_clearance":
+        return answer_terminal_clearance_from_facts(manual_id, question) or no_structured_fact_answer(manual_id, intent)
+    if intent == "max_flue_length":
+        return answer_flue_length_from_facts(manual_id, question) or no_structured_fact_answer(manual_id, intent)
 
     dimension_requested = is_dimension_question(question) or any(term in lowered for term in ("where did that come from", "open the diagram", "show me the page"))
     if not dimension_requested:
