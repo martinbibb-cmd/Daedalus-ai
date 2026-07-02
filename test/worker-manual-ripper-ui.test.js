@@ -83,3 +83,31 @@ test('admin route is present and key gated', async () => {
   assert.match(html, /Upload PDF/);
   assert.match(html, /Stored Documents/);
 });
+
+test('depot notes page renders editable section cards instead of one blob', async () => {
+  const response = await handleRequest(new Request('https://example.test/depot-notes'), {});
+  const html = await response.text();
+
+  assert.equal(response.status, 200);
+  assert.match(html, /Depot Notes/);
+  assert.match(html, /Safe access at height/);
+  assert.match(html, /Installer notes — boiler\/controls/);
+  assert.match(html, /Copy/);
+  assert.match(html, /Request changes to this section/);
+  assert.match(html, /Apply change/);
+  assert.doesNotMatch(html, /one giant combined text block/);
+});
+
+test('depot notes endpoints require gateway configuration', async () => {
+  const response = await handleRequest(
+    new Request('https://example.test/depot-notes/generate', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ transcript: 'Customer says scaffold is required.' }),
+    }),
+    {},
+  );
+
+  assert.equal(response.status, 500);
+  assert.equal((await response.json()).error, 'LLM gateway is not configured');
+});

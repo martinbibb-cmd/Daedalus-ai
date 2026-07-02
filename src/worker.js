@@ -53,6 +53,13 @@ const WELCOME_PAGE = `<!doctype html>
       letter-spacing: 0;
     }
 
+    .links {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 12px;
+    }
+
     a {
       justify-self: center;
       min-width: 132px;
@@ -81,7 +88,10 @@ const WELCOME_PAGE = `<!doctype html>
   <main>
     <h1>The Hitchhiker's Guide to Boilers</h1>
     <p class="panic">DON'T PANIC</p>
-    <a href="/chat">Enter</a>
+    <div class="links">
+      <a href="/chat">Enter</a>
+      <a href="/depot-notes">Depot Notes</a>
+    </div>
   </main>
 </body>
 </html>`;
@@ -394,6 +404,316 @@ const PUBLIC_CHAT_PAGE = `<!doctype html>
     if (!state.history.length) {
       appendMessage("assistant", { answer: "Ask a question and I will search all stored manuals and documents for cited evidence.", confidence: "-" });
     }
+  </script>
+</body>
+</html>`;
+
+const DEPOT_NOTE_HEADINGS = [
+  "Safe access at height",
+  "System characteristics notes",
+  "Components that may require assistance for removal",
+  "Restrictions to work areas or specific access permission required",
+  "External hazardous work areas / ladder / scaffold / specific hazards",
+  "Additional delivery notes",
+  "Office notes",
+  "Installer notes — boiler/controls",
+  "Installer notes — flue",
+  "Installer notes — gas/water",
+  "Installer notes — disruption",
+  "Installer notes — customer agreed actions",
+  "Installer notes — special customer requirements / planned home improvement work",
+];
+
+const DEPOT_NOTES_PAGE = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Depot Notes</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.5;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100dvh;
+      background: #eef3f1;
+      color: #17202a;
+    }
+
+    main {
+      width: min(1080px, calc(100vw - 28px));
+      margin: 0 auto;
+      padding: 18px 0 36px;
+      display: grid;
+      gap: 14px;
+    }
+
+    header,
+    section,
+    .note-card {
+      border: 1px solid #d7dedb;
+      border-radius: 8px;
+      background: #ffffff;
+    }
+
+    header,
+    section {
+      padding: 16px;
+    }
+
+    h1,
+    h2,
+    h3 {
+      margin: 0;
+      letter-spacing: 0;
+    }
+
+    .composer {
+      display: grid;
+      gap: 12px;
+    }
+
+    textarea {
+      width: 100%;
+      box-sizing: border-box;
+      min-height: 180px;
+      padding: 12px;
+      border: 1px solid #b9c5c0;
+      border-radius: 8px;
+      font: inherit;
+      background: #ffffff;
+      color: inherit;
+      resize: vertical;
+    }
+
+    .change-box {
+      min-height: 56px;
+    }
+
+    button {
+      min-height: 40px;
+      padding: 0 14px;
+      border: 0;
+      border-radius: 8px;
+      background: #146c5c;
+      color: #ffffff;
+      font: inherit;
+      font-weight: 800;
+      cursor: pointer;
+    }
+
+    button.secondary {
+      background: #e8edf2;
+      color: #17202a;
+    }
+
+    button:disabled {
+      cursor: wait;
+      opacity: 0.65;
+    }
+
+    .cards {
+      display: grid;
+      gap: 12px;
+    }
+
+    .note-card {
+      display: grid;
+      gap: 10px;
+      padding: 14px;
+    }
+
+    .card-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .note-text {
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      padding: 10px;
+      border: 1px solid #d7dedb;
+      border-radius: 8px;
+      background: #f8faf9;
+    }
+
+    .change-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: end;
+    }
+
+    #status {
+      color: #627083;
+      min-height: 22px;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      body {
+        background: #10151b;
+        color: #edf2f7;
+      }
+
+      header,
+      section,
+      .note-card,
+      textarea {
+        background: #171d25;
+        border-color: #344052;
+      }
+
+      .note-text {
+        background: #10151b;
+        border-color: #344052;
+      }
+
+      button.secondary {
+        background: #263241;
+        color: #edf2f7;
+      }
+    }
+
+    @media (max-width: 720px) {
+      .card-head,
+      .change-row {
+        grid-template-columns: 1fr;
+        display: grid;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Depot Notes</h1>
+      <div id="status">Paste a transcript and generate one editable card per depot-note heading.</div>
+    </header>
+
+    <section class="composer">
+      <h2>Transcript</h2>
+      <textarea id="transcript" placeholder="Paste the customer/job transcript here..."></textarea>
+      <button id="generate" type="button">Generate depot notes</button>
+    </section>
+
+    <section>
+      <h2>Generated notes</h2>
+      <div id="cards" class="cards"></div>
+    </section>
+  </main>
+  <script>
+    const headings = ${JSON.stringify(DEPOT_NOTE_HEADINGS)};
+    const transcript = document.getElementById("transcript");
+    const generate = document.getElementById("generate");
+    const cards = document.getElementById("cards");
+    const statusEl = document.getElementById("status");
+    const notes = new Map();
+
+    function setStatus(text) {
+      statusEl.textContent = text;
+    }
+
+    function renderCards(sections) {
+      cards.textContent = "";
+      for (const heading of headings) {
+        const section = sections.find((item) => item.heading === heading) || { heading, text: "Not mentioned" };
+        notes.set(heading, section.text || "Not mentioned");
+        const card = document.createElement("article");
+        card.className = "note-card";
+        const head = document.createElement("div");
+        head.className = "card-head";
+        const title = document.createElement("h3");
+        title.textContent = heading;
+        const copy = document.createElement("button");
+        copy.type = "button";
+        copy.className = "secondary";
+        copy.textContent = "Copy";
+        copy.addEventListener("click", async () => {
+          await navigator.clipboard.writeText(notes.get(heading) || "");
+          setStatus("Copied: " + heading);
+        });
+        head.appendChild(title);
+        head.appendChild(copy);
+        const text = document.createElement("div");
+        text.className = "note-text";
+        text.textContent = notes.get(heading);
+        const changeRow = document.createElement("div");
+        changeRow.className = "change-row";
+        const change = document.createElement("textarea");
+        change.className = "change-box";
+        change.placeholder = "Request changes to this section...";
+        const apply = document.createElement("button");
+        apply.type = "button";
+        apply.textContent = "Apply change";
+        apply.addEventListener("click", async () => {
+          const request = change.value.trim();
+          if (!request) return;
+          apply.disabled = true;
+          setStatus("Revising: " + heading);
+          try {
+            const response = await fetch("/depot-notes/revise", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({
+                transcript: transcript.value,
+                heading,
+                currentText: notes.get(heading),
+                changeRequest: request
+              })
+            });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(data.error || data.detail || "Revision failed");
+            notes.set(heading, data.text || "Not mentioned");
+            text.textContent = notes.get(heading);
+            change.value = "";
+            setStatus("Updated: " + heading);
+          } catch (error) {
+            setStatus(error.message || "Revision failed");
+          } finally {
+            apply.disabled = false;
+          }
+        });
+        changeRow.appendChild(change);
+        changeRow.appendChild(apply);
+        card.appendChild(head);
+        card.appendChild(text);
+        card.appendChild(changeRow);
+        cards.appendChild(card);
+      }
+    }
+
+    generate.addEventListener("click", async () => {
+      const text = transcript.value.trim();
+      if (!text) {
+        setStatus("Paste a transcript first.");
+        return;
+      }
+      generate.disabled = true;
+      setStatus("Generating depot notes...");
+      try {
+        const response = await fetch("/depot-notes/generate", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ transcript: text })
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || data.detail || "Generation failed");
+        renderCards(Array.isArray(data.sections) ? data.sections : []);
+        setStatus("Generated " + headings.length + " editable sections.");
+      } catch (error) {
+        setStatus(error.message || "Generation failed");
+      } finally {
+        generate.disabled = false;
+      }
+    });
+
+    renderCards(headings.map((heading) => ({ heading, text: "Not mentioned" })));
   </script>
 </body>
 </html>`;
@@ -1696,6 +2016,18 @@ async function handleRequest(request, env) {
     return html(PUBLIC_CHAT_PAGE);
   }
 
+  if (request.method === "GET" && url.pathname === "/depot-notes") {
+    return html(DEPOT_NOTES_PAGE);
+  }
+
+  if (request.method === "POST" && url.pathname === "/depot-notes/generate") {
+    return handleDepotNotesGenerate(request, env);
+  }
+
+  if (request.method === "POST" && url.pathname === "/depot-notes/revise") {
+    return handleDepotNotesRevise(request, env);
+  }
+
   if (request.method === "GET" && url.pathname === "/dev") {
     const blocked = requireAdmin(request, env);
     if (blocked) return blocked;
@@ -1808,6 +2140,155 @@ async function handleManualProxy(request, env, url, options = {}) {
         totalMs: Date.now() - started,
       },
     }, 502);
+  }
+}
+
+async function handleDepotNotesGenerate(request, env) {
+  if (!hasGatewayConfig(env)) {
+    return json({ error: "LLM gateway is not configured" }, 500);
+  }
+
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return json({ error: "Invalid JSON", detail: "Expected JSON body" }, 400);
+  }
+
+  const transcript = typeof body.transcript === "string" ? body.transcript.trim() : "";
+  if (!transcript) {
+    return json({ error: "Transcript is required" }, 400);
+  }
+
+  const prompt = [
+    "Create depot notes from the transcript.",
+    "Return strict JSON only with this shape: {\"sections\":[{\"heading\":\"...\",\"text\":\"...\"}]}",
+    "Use exactly these headings and no others: " + DEPOT_NOTE_HEADINGS.join(" | "),
+    "Each generated section uses short practical bullets.",
+    "Use ; as the line-break separator for depot compatibility.",
+    "Keep text short enough for engineers to scan quickly.",
+    "Avoid repeating generic T&Cs.",
+    "Use \"Not mentioned\" only when there is no relevant job-specific information.",
+    "Never invent information not present in the transcript.",
+    "Transcript:",
+    transcript,
+  ].join("\n");
+
+  const result = await gatewayFetch(env, "/v1/chat", {
+    method: "POST",
+    auth: true,
+    body: {
+      model: env.DAEDALUS_LLM_MODEL,
+      message: prompt,
+      temperature: 0,
+      system: "You generate concise depot-compatible job notes as strict JSON.",
+    },
+    timeoutMs: 45000,
+  });
+
+  if (!result.ok) {
+    return json({ error: classifyGatewayError(result), safeBody: safeGatewayBody(result.body) }, result.status || 502);
+  }
+
+  return json({ sections: normalizeDepotSections(extractGatewayResponse(result.body)) });
+}
+
+async function handleDepotNotesRevise(request, env) {
+  if (!hasGatewayConfig(env)) {
+    return json({ error: "LLM gateway is not configured" }, 500);
+  }
+
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return json({ error: "Invalid JSON", detail: "Expected JSON body" }, 400);
+  }
+
+  const transcript = typeof body.transcript === "string" ? body.transcript.trim() : "";
+  const heading = typeof body.heading === "string" ? body.heading.trim() : "";
+  const currentText = typeof body.currentText === "string" ? body.currentText.trim() : "";
+  const changeRequest = typeof body.changeRequest === "string" ? body.changeRequest.trim() : "";
+  if (!transcript || !heading || !changeRequest || !DEPOT_NOTE_HEADINGS.includes(heading)) {
+    return json({ error: "Transcript, valid heading, and change request are required" }, 400);
+  }
+
+  const prompt = [
+    "Revise one depot-note section only.",
+    "Return strict JSON only with this shape: {\"heading\":\"" + heading + "\",\"text\":\"...\"}",
+    "Section-level change request must only alter this section: " + heading,
+    "Retain facts from the transcript unless the user explicitly asks to remove or reword them.",
+    "Do not introduce facts absent from the transcript or user change request.",
+    "Use short practical bullets.",
+    "Use ; as the line-break separator for depot compatibility.",
+    "Keep it short enough for engineers to scan quickly.",
+    "Use \"Not mentioned\" only when there is no relevant job-specific information.",
+    "Heading: " + heading,
+    "Current section text: " + currentText,
+    "User change request: " + changeRequest,
+    "Transcript:",
+    transcript,
+  ].join("\n");
+
+  const result = await gatewayFetch(env, "/v1/chat", {
+    method: "POST",
+    auth: true,
+    body: {
+      model: env.DAEDALUS_LLM_MODEL,
+      message: prompt,
+      temperature: 0,
+      system: "You revise one depot-note section as strict JSON without inventing facts.",
+    },
+    timeoutMs: 45000,
+  });
+
+  if (!result.ok) {
+    return json({ error: classifyGatewayError(result), safeBody: safeGatewayBody(result.body) }, result.status || 502);
+  }
+
+  const parsed = parseJsonFromModel(extractGatewayResponse(result.body));
+  return json({
+    heading,
+    text: sanitizeDepotText(parsed && typeof parsed.text === "string" ? parsed.text : String(extractGatewayResponse(result.body) || "")),
+  });
+}
+
+function normalizeDepotSections(value) {
+  const parsed = parseJsonFromModel(value);
+  const source = parsed && Array.isArray(parsed.sections) ? parsed.sections : [];
+  return DEPOT_NOTE_HEADINGS.map((heading) => {
+    const match = source.find((item) => item && item.heading === heading);
+    return {
+      heading,
+      text: sanitizeDepotText(match && typeof match.text === "string" ? match.text : "Not mentioned"),
+    };
+  });
+}
+
+function sanitizeDepotText(value) {
+  const text = String(value || "").trim();
+  if (!text) return "Not mentioned";
+  return text
+    .split(/\r?\n+/)
+    .map((line) => line.replace(/^[\s*•-]+/, "").trim())
+    .filter(Boolean)
+    .join("; ");
+}
+
+function parseJsonFromModel(value) {
+  if (value && typeof value === "object") return value;
+  const text = String(value || "").trim();
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    const match = text.match(/\{[\s\S]*\}/);
+    if (!match) return null;
+    try {
+      return JSON.parse(match[0]);
+    } catch {
+      return null;
+    }
   }
 }
 

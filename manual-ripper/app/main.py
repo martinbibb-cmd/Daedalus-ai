@@ -845,7 +845,7 @@ def evidence_object_to_response(item: dict[str, Any]) -> dict[str, Any]:
 def answer_from_evidence_store(manual_id: str, question: str) -> dict[str, Any] | None:
     lowered = question.lower()
     page_match = re.search(r"\bpage\s+(\d{1,3})\b", lowered)
-    if page_match and any(term in lowered for term in ("show", "open", "image", "page")):
+    if page_match and any(term in lowered for term in ("show", "open", "image", "picture", "display", "give me the page")):
         page_number = int(page_match.group(1))
         return {
             "answer": f"Page {page_number} image is available.",
@@ -978,6 +978,68 @@ def deterministic_visual_answer(manual_id: str, question: str) -> dict[str, Any]
             if item.get("asset_url")
         ],
         "deterministic": True,
+    }
+
+
+def extractive_answer_from_results(question: str, evidence: list[dict[str, Any]]) -> dict[str, Any] | None:
+    if not evidence:
+        return None
+
+    top: list[dict[str, Any]] = []
+    seen_pages: set[tuple[str, int]] = set()
+    for item in evidence:
+        key = (item.get("manual_id", ""), int(item.get("page") or 0))
+        if key in seen_pages:
+            continue
+        seen_pages.add(key)
+        top.append(item)
+        if len(top) >= 5:
+            break
+
+    if not top:
+        return None
+
+    terms = [term for term in query_terms(question) if len(term) >= 4]
+    pages_by_manual: dict[str, list[dict[str, Any]]] = {}
+    for item in top:
+        pages_by_manual.setdefault(item["manual_id"], []).append(item)
+
+    lines = ["Best matching manual text I found:"]
+    for item in top[:4]:
+        snippet = clean_text(item.get("snippet") or item.get("description") or "")
+        lines.append(f"Page {item['page']}: {snippet[:360]}")
+
+    if terms:
+        counts: list[str] = []
+        for manual_id in pages_by_manual:
+            total = 0
+            for page in load_pages(manual_id):
+                lowered = page.get("text", "").lower()
+                total += sum(lowered.count(term) for term in terms)
+            if total:
+                counts.append(f"{total} term match{'es' if total != 1 else ''}")
+        if counts:
+            lines.append("\nMatch count: " + ", ".join(counts[:3]))
+
+    source_pages = sorted({int(item["page"]) for item in top if item.get("page")})
+    if source_pages:
+        lines.append("\nSource: " + ", ".join(f"Page {page}" for page in source_pages))
+
+    return {
+        "answer": "\n".join(lines),
+        "citations": [
+            {"manual_id": item["manual_id"], "page": item["page"], "label": f"Page {item['page']}"}
+            for item in top
+        ],
+        "confidence": top[0].get("confidence", "medium"),
+        "evidence": top,
+        "visual_assets": [
+            {"manual_id": item["manual_id"], "page": item["page"], "url": item.get("asset_url"), "thumbnail_url": item.get("thumbnail_url")}
+            for item in top
+            if item.get("asset_url")
+        ],
+        "deterministic": True,
+        "source": "extractive-search",
     }
 
 
@@ -1143,6 +1205,9 @@ def query_manual(manual_id: str, request: QueryRequest) -> dict[str, Any]:
             "evidence": [],
             "visual_assets": [],
         }
+    extractive = extractive_answer_from_results(request.question, evidence)
+    if extractive:
+        return {"manual_id": manual_id, **extractive}
     answer = ask_gateway(request.question, evidence)
     citations = [{"page": item["page"], "label": f"Page {item['page']}"} for item in evidence]
     return {
@@ -1181,6 +1246,10 @@ def query_all_manuals(request: QueryRequest) -> dict[str, Any]:
         deterministic = deterministic_answer(manual_id, request.question)
         if deterministic:
             return {"manual_id": manual_id, **deterministic}
+
+    extractive = extractive_answer_from_results(request.question, evidence)
+    if extractive:
+        return {"manual_id": evidence[0].get("manual_id"), **extractive}
 
     answer = ask_gateway(request.question, evidence)
     citations = [

@@ -320,3 +320,56 @@ def test_no_generated_image_is_treated_as_source_evidence(tmp_path, monkeypatch)
     assert response.status_code == 200
     assert response.json()["source_policy"]["generated_images_as_source"] is False
     assert all(item["generated"] is False for item in response.json()["evidence"])
+
+
+def test_global_query_returns_extractive_text_before_llm_for_simple_search(tmp_path, monkeypatch):
+    configure_storage(tmp_path, monkeypatch)
+    manual_id = "weight-manual"
+    pages = [
+        {
+            "page": 3,
+            "text": "Lift weight is listed in the installation data. Appliance lift weight 27.4 kg.",
+            "layout_blocks": [],
+            "tables": [],
+            "key_values": [],
+            "assets": {"thumbnail_url": f"/manuals/{manual_id}/assets/page-3-thumb.png"},
+        },
+        {
+            "page": 8,
+            "text": "Part L and Part P generic electrical guidance.",
+            "layout_blocks": [],
+            "tables": [],
+            "key_values": [],
+            "assets": {"thumbnail_url": f"/manuals/{manual_id}/assets/page-8-thumb.png"},
+        },
+    ]
+    main.extracted_path(manual_id).write_text(json.dumps({"manual_id": manual_id, "pages": pages}), encoding="utf-8")
+    with sqlite3.connect(main.DB_PATH) as conn:
+        conn.execute(
+            """
+            INSERT INTO manuals (id, filename, manufacturer, model, appliance_type, uploaded_at, page_count, extraction_status, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
+            """,
+            (
+                manual_id,
+                "weight.pdf",
+                "Worcester",
+                "Greenstar Ri ErP",
+                "boiler",
+                datetime.now(timezone.utc).isoformat(),
+                2,
+                "complete",
+            ),
+        )
+    client = TestClient(main.app)
+
+    response = client.post("/manuals/query", json={"question": "Weight is mentioned on page 3, where is the information?", "limit": 5})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["source"] == "extractive-search"
+    assert "Page 3:" in body["answer"]
+    assert "27.4 kg" in body["answer"]
+    assert body["citations"][0]["page"] == 3
+    assert body["evidence"][0]["type"] == "page-text"
+    assert "Page 3 image is available" not in body["answer"]
