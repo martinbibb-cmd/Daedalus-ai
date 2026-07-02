@@ -83,6 +83,46 @@ def seed_manual(manual_id="greenstar-ri"):
     return manual_id
 
 
+def seed_unrelated_manual(manual_id="shower-pack"):
+    pages = [
+        {
+            "page": 31,
+            "text": "Other Packs CSHO6027 Deep Cool Touch Bar Mixer Shower price list and fitting pack.",
+            "layout_blocks": [],
+            "tables": [],
+            "key_values": [],
+            "assets": {"thumbnail_url": f"/manuals/{manual_id}/assets/page-31-thumb.png"},
+        },
+        {
+            "page": 89,
+            "text": "Building regulations and construction stages. Show thermal continuity and insulation details.",
+            "layout_blocks": [],
+            "tables": [],
+            "key_values": [],
+            "assets": {"thumbnail_url": f"/manuals/{manual_id}/assets/page-89-thumb.png"},
+        },
+    ]
+    main.extracted_path(manual_id).write_text(json.dumps({"manual_id": manual_id, "pages": pages}), encoding="utf-8")
+    with sqlite3.connect(main.DB_PATH) as conn:
+        conn.execute(
+            """
+            INSERT INTO manuals (id, filename, manufacturer, model, appliance_type, uploaded_at, page_count, extraction_status, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
+            """,
+            (
+                manual_id,
+                "shower-packs.pdf",
+                "Depot",
+                "Shower packs",
+                "accessory",
+                datetime.now(timezone.utc).isoformat(),
+                2,
+                "complete",
+            ),
+        )
+    return manual_id
+
+
 def seed_manual_with_invalid_technical_data_dimension_page(manual_id="greenstar-ri-page8"):
     pages = [
         {
@@ -373,3 +413,36 @@ def test_global_query_returns_extractive_text_before_llm_for_simple_search(tmp_p
     assert body["citations"][0]["page"] == 3
     assert body["evidence"][0]["type"] == "page-text"
     assert "Page 3 image is available" not in body["answer"]
+
+
+def test_global_ri_width_query_uses_matching_boiler_manual_not_unrelated_docs(tmp_path, monkeypatch):
+    configure_storage(tmp_path, monkeypatch)
+    seed_manual("greenstar-ri")
+    seed_unrelated_manual("shower-pack")
+    client = TestClient(main.app)
+
+    response = client.post("/manuals/query", json={"question": "How wide is the ri?", "limit": 6})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["manual_id"] == "greenstar-ri"
+    assert "Width: 390 mm" in body["answer"]
+    assert body["citations"][0]["page"] in {7, 12}
+    assert all(item["manual_id"] == "greenstar-ri" for item in body["evidence"])
+    assert "Shower" not in body["answer"]
+    assert "building regulations" not in body["answer"].lower()
+
+
+def test_global_specific_ri_query_rejects_unrelated_global_results(tmp_path, monkeypatch):
+    configure_storage(tmp_path, monkeypatch)
+    seed_unrelated_manual("shower-pack")
+    client = TestClient(main.app)
+
+    response = client.post("/manuals/query", json={"question": "How wide is the ri?", "limit": 6})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["answer"] == "I could not find relevant evidence for that in the selected/manual context."
+    assert body["confidence"] == "low"
+    assert body["evidence"] == []
+    assert body["citations"] == []

@@ -488,11 +488,72 @@ def tokenize(text: str) -> list[str]:
     return [token for token in re.findall(r"[a-z0-9]{3,}", text.lower()) if token not in {"the", "and", "for", "with", "that", "this"}]
 
 
+def exact_term_count(text: str, term: str) -> int:
+    if not term:
+        return 0
+    if len(term) <= 3:
+        return len(re.findall(rf"(?<![a-z0-9]){re.escape(term)}(?![a-z0-9])", text))
+    return text.count(term)
+
+
+def metadata_text(manual: dict[str, Any]) -> str:
+    return clean_text(" ".join(
+        str(manual.get(field) or "")
+        for field in ("filename", "manufacturer", "model", "appliance_type")
+    )).lower()
+
+
+def manual_metadata_score(manual: dict[str, Any], terms: list[str]) -> int:
+    text = metadata_text(manual)
+    score = 0
+    for term in terms:
+        hits = exact_term_count(text, term)
+        if hits:
+            score += hits * (12 if len(term) <= 3 else 6)
+    if "boiler" in terms and "boiler" in text:
+        score += 8
+    return score
+
+
+def specific_manual_terms(query: str) -> list[str]:
+    lowered = query.lower()
+    terms: list[str] = []
+    if re.search(r"\bri\b", lowered):
+        terms.append("ri")
+    return terms
+
+
+def matches_specific_manual_intent(item: dict[str, Any], terms: list[str]) -> bool:
+    if not terms:
+        return True
+    text = clean_text(" ".join([
+        str(item.get("manual") or ""),
+        str(item.get("snippet") or ""),
+        str(item.get("description") or ""),
+    ])).lower()
+    return any(exact_term_count(text, term) > 0 for term in terms)
+
+
+def no_relevant_manual_answer() -> dict[str, Any]:
+    return {
+        "answer": "I could not find relevant evidence for that in the selected/manual context.",
+        "manual_id": None,
+        "citations": [],
+        "confidence": "low",
+        "evidence": [],
+        "visual_assets": [],
+    }
+
+
 def query_terms(query: str) -> list[str]:
     terms = tokenize(query)
     lowered = query.lower()
-    if any(term in lowered for term in ("dimension", "dimensions", "size", "height", "width", "depth", "h x w", "hxw")):
+    if re.search(r"\bri\b", lowered):
+        terms.extend(["ri", "greenstar", "boiler", "appliance"])
+    if any(term in lowered for term in ("dimension", "dimensions", "size", "height", "width", "wide", "depth", "h x w", "hxw")):
         terms.extend(tokenize(" ".join(DIMENSION_TERMS)))
+        if "wide" in lowered:
+            terms.extend(["width", "appliance"])
     for topic_terms in DETERMINISTIC_TOPICS.values():
         if any(term in lowered for term in topic_terms):
             terms.extend(tokenize(" ".join(topic_terms)))
@@ -520,10 +581,11 @@ def search_pages(query: str, manual_id: str | None = None, limit: int = 10) -> l
                 manual = extract_pdf(manual["id"])
             except HTTPException:
                 continue
+        metadata_score = manual_metadata_score(manual, terms)
         for page in load_pages(manual["id"]):
             text = page.get("text", "")
             lowered = text.lower()
-            score = sum(lowered.count(term) for term in terms)
+            score = metadata_score + sum(exact_term_count(lowered, term) for term in terms)
             score += sum(2 for term in DIMENSION_TERMS if term in lowered and term in " ".join(terms))
             query_phrase = clean_text(query).lower().strip("?.! ")
             if len(query_phrase) >= 6 and query_phrase in lowered:
@@ -544,6 +606,7 @@ def search_pages(query: str, manual_id: str | None = None, limit: int = 10) -> l
                 "type": "page-text",
                 "bbox": None,
                 "score": score,
+                "metadata_score": metadata_score,
                 "confidence": confidence_for_score(score),
                 "asset_url": public_page_image_path(manual["id"], page_number),
                 "thumbnail_url": page.get("assets", {}).get("thumbnail_url") or public_page_image_path(manual["id"], page_number),
@@ -593,7 +656,7 @@ def evidence_from_page(manual_id: str, page: dict[str, Any], snippet: str, evide
 
 def is_dimension_question(question: str) -> bool:
     lowered = question.lower()
-    return any(term in lowered for term in ("dimension", "dimensions", "size", "height", "width", "depth", "h x w", "hxw"))
+    return any(term in lowered for term in ("dimension", "dimensions", "size", "height", "width", "wide", "depth", "h x w", "hxw"))
 
 
 def is_visual_likely_question(question: str) -> bool:
@@ -1228,14 +1291,13 @@ def query_manual(manual_id: str, request: QueryRequest) -> dict[str, Any]:
 def query_all_manuals(request: QueryRequest) -> dict[str, Any]:
     evidence = search_pages(request.question, manual_id=None, limit=request.limit)
     if not evidence:
-        return {
-            "answer": "No relevant manual evidence was found.",
-            "manual_id": None,
-            "citations": [],
-            "confidence": "low",
-            "evidence": [],
-            "visual_assets": [],
-        }
+        return no_relevant_manual_answer()
+
+    intent_terms = specific_manual_terms(request.question)
+    if intent_terms:
+        evidence = [item for item in evidence if matches_specific_manual_intent(item, intent_terms)]
+        if not evidence:
+            return no_relevant_manual_answer()
 
     checked_manuals: set[str] = set()
     for item in evidence:
