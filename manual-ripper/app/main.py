@@ -17,6 +17,7 @@ from pydantic import BaseModel
 
 
 APP_VERSION = "manual-ripper-0.4-guide"
+EVIDENCE_SCHEMA_VERSION = "evidence-store-v2"
 MAX_UPLOAD_BYTES = int(os.getenv("MANUAL_RIPPER_MAX_UPLOAD_BYTES", str(30 * 1024 * 1024)))
 STORAGE_ROOT = Path(os.getenv("MANUAL_RIPPER_STORAGE_ROOT", "/srv/daedalus/manuals"))
 ORIGINALS_DIR = STORAGE_ROOT / "originals"
@@ -426,9 +427,9 @@ def classify_question_intent(question: str) -> str:
         return "wiring"
     if any(term in lowered for term in ("maximum flue length", "max flue length", "flue length", "equivalent length", "90", "elbow")):
         return "max_flue_length"
-    if "terminal" in lowered and any(term in lowered for term in ("clearance", "position", "distance", "opening", "window", "vent", "corner")):
+    if "terminal" in lowered and any(term in lowered for term in ("clearance", "position", "distance", "opening", "window", "vent", "corner", "change of fabric")):
         return "terminal_clearance"
-    if any(term in lowered for term in ("clearance", "clearances")) and any(term in lowered for term in ("opening", "window", "vent", "corner", "terminal")):
+    if any(term in lowered for term in ("clearance", "clearances")) and any(term in lowered for term in ("opening", "window", "vent", "corner", "terminal", "change of fabric")):
         return "terminal_clearance"
     if is_dimension_question(question):
         return "dimensions"
@@ -454,8 +455,8 @@ def terminal_condition_from_text(text: str) -> str | None:
     lowered = text.lower()
     if any(term in lowered for term in ("opening", "openable", "window", "air vent", "ventilation opening")):
         return "to openable window or air vent"
-    if "corner" in lowered and ("internal" in lowered or "external" in lowered):
-        return "internal or external corner"
+    if ("corner" in lowered and ("internal" in lowered or "external" in lowered)) or "change of fabric" in lowered:
+        return "internal or external corner/change of fabric"
     return None
 
 
@@ -464,15 +465,57 @@ def requested_terminal_condition(question: str) -> str | None:
 
 
 def parse_terminal_clearance_fact(manual: dict[str, Any], page: dict[str, Any], row_text: str) -> dict[str, Any] | None:
+    facts = parse_terminal_clearance_facts(manual, page, row_text)
+    return facts[0] if facts else None
+
+
+def parse_terminal_clearance_facts(manual: dict[str, Any], page: dict[str, Any], row_text: str) -> list[dict[str, Any]]:
+    lowered = row_text.lower()
+    if not any(term in lowered for term in ("terminal", "clearance", "opening", "openable", "window", "vent", "corner", "change of fabric")):
+        return []
+    page_number = int(page["page"])
+    patterns = [
+        ("to openable window or air vent", r"(?P<text>.{0,90}(?:opening|openable|window|air vent|ventilation opening).{0,90}?(?P<value>\d{2,4})\s*mm)"),
+        ("internal or external corner/change of fabric", r"(?P<text>.{0,90}(?:internal\s+or\s+external\s+corner|external\s+or\s+internal\s+corner|internal.*?corner|external.*?corner|change\s+of\s+fabric).{0,90}?(?P<value>\d{2,4})\s*mm)"),
+    ]
+    facts: list[dict[str, Any]] = []
+    seen_conditions: set[str] = set()
+    for condition, pattern in patterns:
+        match = re.search(pattern, row_text, re.I)
+        if not match or condition in seen_conditions:
+            continue
+        seen_conditions.add(condition)
+        evidence_text = clean_text(match.group("text"))
+        value = int(match.group("value"))
+        obj = evidence_object(
+            manual,
+            category="terminal_clearance",
+            field=condition,
+            value=value,
+            unit="mm",
+            source_page=page_number,
+            source_type="table-row",
+            confidence="high",
+            validation_status="validated",
+            evidence_text=evidence_text,
+        )
+        obj.update({
+            "type": "terminal_clearance",
+            "condition": condition,
+            "value_mm": value,
+            "units": "mm",
+            "table_reference": f"Page {page_number} terminal clearance table",
+        })
+        facts.append(obj)
+    if facts:
+        return facts
+
     condition = terminal_condition_from_text(row_text)
     if not condition:
-        return None
-    if not any(term in row_text.lower() for term in ("terminal", "clearance", "opening", "window", "vent", "corner")):
-        return None
+        return []
     match = re.search(r"(?<!\d)(?P<value>\d{2,4})\s*mm\b", row_text, re.I)
     if not match:
-        return None
-    page_number = int(page["page"])
+        return []
     obj = evidence_object(
         manual,
         category="terminal_clearance",
@@ -492,17 +535,17 @@ def parse_terminal_clearance_fact(manual: dict[str, Any], page: dict[str, Any], 
         "units": "mm",
         "table_reference": f"Page {page_number} terminal clearance table",
     })
-    return obj
+    return [obj]
 
 
 def parse_flue_fact(manual: dict[str, Any], page: dict[str, Any], row_text: str) -> dict[str, Any] | None:
     lowered = row_text.lower()
-    if "flue" not in lowered and "elbow" not in lowered:
+    if "flue" not in lowered and "elbow" not in lowered and "bend" not in lowered:
         return None
     page_number = int(page["page"])
-    elbow_match = re.search(r"\b(?P<angle>45|90)\s*(?:deg|degree|degrees)?\s*elbow\b.*?(?P<value>\d+(?:\.\d+)?)\s*m\b", row_text, re.I)
+    elbow_match = re.search(r"\b(?P<angle>45|90)\D{0,12}(?:elbow|bend)\b.*?(?P<value>\d+(?:\.\d+)?)\s*m\b", row_text, re.I)
     if not elbow_match:
-        elbow_match = re.search(r"\b(?P<value>\d+(?:\.\d+)?)\s*m\b.*?\b(?P<angle>45|90)\s*(?:deg|degree|degrees)?\s*elbow\b", row_text, re.I)
+        elbow_match = re.search(r"\b(?P<value>\d+(?:\.\d+)?)\s*m\b.*?\b(?P<angle>45|90)\D{0,12}(?:elbow|bend)\b", row_text, re.I)
     if elbow_match and any(term in lowered for term in ("equivalent", "deduct", "reduce", "reduction", "allowance", "de-rating", "derating")):
         angle = int(elbow_match.group("angle"))
         value = float(elbow_match.group("value"))
@@ -562,7 +605,8 @@ def build_table_fact_evidence(manual: dict[str, Any], pages: list[dict[str, Any]
     seen: set[tuple[str, str, int, str]] = set()
     for page in pages:
         for row in page_table_rows(page):
-            for fact in (parse_terminal_clearance_fact(manual, page, row), parse_flue_fact(manual, page, row)):
+            row_facts = [*parse_terminal_clearance_facts(manual, page, row), parse_flue_fact(manual, page, row)]
+            for fact in row_facts:
                 if not fact:
                     continue
                 key = (fact["category"], fact["field"], int(fact["source_page"]), fact["evidence_text"].lower())
@@ -648,7 +692,7 @@ def build_evidence_index(manual_id: str, pages: list[dict[str, Any]] | None = No
         "model": manual.get("model"),
         "variant": manual.get("model"),
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "schema_version": "evidence-store-v1",
+        "schema_version": EVIDENCE_SCHEMA_VERSION,
         "facts": [structured_fact(item) for item in table_facts],
         "evidence": evidence,
         "source_policy": {
@@ -663,7 +707,9 @@ def build_evidence_index(manual_id: str, pages: list[dict[str, Any]] | None = No
 def load_evidence_index(manual_id: str) -> dict[str, Any]:
     path = evidence_index_path(manual_id)
     if path.exists():
-        return json.loads(path.read_text(encoding="utf-8"))
+        index = json.loads(path.read_text(encoding="utf-8"))
+        if index.get("schema_version") == EVIDENCE_SCHEMA_VERSION:
+            return index
     return build_evidence_index(manual_id)
 
 
@@ -1104,7 +1150,7 @@ def answer_terminal_clearance_from_facts(manual_id: str, question: str) -> dict[
     requested = requested_terminal_condition(question)
     available = {str(item.get("condition") or item.get("field")) for item in facts}
     if not requested:
-        if {"to openable window or air vent", "internal or external corner"}.issubset(available):
+        if {"to openable window or air vent", "internal or external corner/change of fabric"}.issubset(available):
             return {
                 "answer": "Do you mean an opening/window or an internal corner?",
                 "manual_id": manual_id,

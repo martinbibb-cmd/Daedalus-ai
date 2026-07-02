@@ -2164,6 +2164,12 @@ async function handleRequest(request, env) {
     return html(DEPOT_NOTES_PAGE);
   }
 
+  if (request.method === "GET" && url.pathname === "/depot-notes/debug") {
+    const blocked = requireAdmin(request, env);
+    if (blocked) return blocked;
+    return handleDepotNotesDebug(env);
+  }
+
   if (request.method === "POST" && url.pathname === "/depot-notes/generate") {
     return handleDepotNotesGenerate(request, env);
   }
@@ -2330,7 +2336,7 @@ async function handleDepotNotesGenerate(request, env) {
         sections: DEPOT_NOTE_HEADINGS.map((heading) => ({ heading, text: "string" })),
       },
     },
-    timeoutMs: 45000,
+    timeoutMs: 90000,
   });
 
   if (!result.ok) {
@@ -2387,7 +2393,7 @@ async function handleDepotNotesRevise(request, env) {
       temperature: 0,
       schema: { heading, text: "string" },
     },
-    timeoutMs: 45000,
+    timeoutMs: 90000,
   });
 
   if (!result.ok) {
@@ -2424,13 +2430,113 @@ function sanitizeDepotText(value) {
 }
 
 function depotGatewayDiagnostic(result, endpoint) {
+  const failureKind = depotFailureKind(result);
   return {
     error: classifyGatewayError(result),
+    failureKind,
     endpoint,
     status: result.status || 0,
-    diagnostic: "Verify the gateway supports " + endpoint + " and the configured model is available.",
+    diagnostic: depotDiagnosticMessage(failureKind, endpoint),
     safeBody: safeGatewayBody(result.body),
   };
+}
+
+async function handleDepotNotesDebug(env) {
+  const endpoint = "/v1/json";
+  const configuredModel = env.DAEDALUS_LLM_MODEL || null;
+  const gatewayOrigin = safeOrigin(env.DAEDALUS_LLM_GATEWAY_URL);
+  if (!hasGatewayConfig(env)) {
+    return json({
+      ok: false,
+      config: {
+        gatewayConfigured: Boolean(env.DAEDALUS_LLM_GATEWAY_URL),
+        gatewayOrigin,
+        apiKeyConfigured: Boolean(env.DAEDALUS_LLM_API_KEY),
+        modelConfigured: Boolean(env.DAEDALUS_LLM_MODEL),
+        model: configuredModel,
+      },
+      route: endpoint,
+      failureKind: "config_missing",
+      diagnostic: "Set DAEDALUS_LLM_GATEWAY_URL, DAEDALUS_LLM_API_KEY, and DAEDALUS_LLM_MODEL.",
+    }, 500);
+  }
+
+  const health = await gatewayFetch(env, "/health", { method: "GET", auth: false, timeoutMs: 8000 });
+  const models = await gatewayFetch(env, "/models", { method: "GET", auth: true, timeoutMs: 12000 });
+  const modelNames = models.ok && Array.isArray(models.body.models)
+    ? models.body.models.map((model) => model && (model.name || model.model)).filter(Boolean)
+    : [];
+  const modelAvailable = configuredModel ? modelNames.includes(configuredModel) : Boolean(models.body.defaultModel);
+  const jsonProbe = await gatewayFetch(env, endpoint, {
+    method: "POST",
+    auth: true,
+    body: {
+      model: configuredModel,
+      prompt: "Return this JSON exactly: {\"ok\":true}",
+      temperature: 0,
+      schema: { ok: true },
+    },
+    timeoutMs: 25000,
+  });
+  const failureKind = !health.ok
+    ? depotFailureKind(health)
+    : !models.ok
+      ? depotFailureKind(models)
+      : !modelAvailable
+        ? "model_missing"
+        : !jsonProbe.ok
+          ? depotFailureKind(jsonProbe)
+          : null;
+
+  return json({
+    ok: !failureKind,
+    config: {
+      gatewayConfigured: Boolean(env.DAEDALUS_LLM_GATEWAY_URL),
+      gatewayOrigin,
+      apiKeyConfigured: Boolean(env.DAEDALUS_LLM_API_KEY),
+      modelConfigured: Boolean(env.DAEDALUS_LLM_MODEL),
+      model: configuredModel,
+    },
+    route: endpoint,
+    health: diagnosticFromResult(health),
+    models: {
+      ...diagnosticFromResult(models),
+      defaultModel: models.body.defaultModel || configuredModel,
+      configuredModel,
+      configuredModelAvailable: modelAvailable,
+      modelCount: modelNames.length,
+    },
+    jsonProbe: {
+      ...diagnosticFromResult(jsonProbe),
+      failureKind: jsonProbe.ok ? undefined : depotFailureKind(jsonProbe),
+    },
+    failureKind,
+    diagnostic: failureKind ? depotDiagnosticMessage(failureKind, endpoint) : "Depot Notes JSON route is reachable and the configured model is available.",
+  }, failureKind ? 502 : 200);
+}
+
+function depotFailureKind(result) {
+  const bodyText = JSON.stringify(result && result.body ? result.body : {}).toLowerCase();
+  if (!result || result.status === 0) return "gateway_unreachable";
+  if (result.status === 401 || result.status === 403) return "auth_failed";
+  if (result.status === 404 || result.status === 405) return "route_missing";
+  if (result.status === 408 || result.status === 504) return "upstream_timeout";
+  if (result.status === 524) return "cloudflare_timeout";
+  if (bodyText.includes("model") && (bodyText.includes("not found") || bodyText.includes("unavailable") || bodyText.includes("missing"))) {
+    return "model_missing";
+  }
+  return "upstream_error";
+}
+
+function depotDiagnosticMessage(kind, endpoint) {
+  if (kind === "config_missing") return "Worker environment is missing gateway URL, API key, or model.";
+  if (kind === "gateway_unreachable") return "The Worker could not reach the configured LLM gateway origin.";
+  if (kind === "auth_failed") return "The LLM gateway rejected the Worker API key.";
+  if (kind === "route_missing") return "The configured LLM gateway does not serve " + endpoint + ". Deploy/restart the gateway code that includes this route.";
+  if (kind === "model_missing") return "The configured model is not listed by /models or the upstream reported that the model is unavailable.";
+  if (kind === "upstream_timeout") return "The LLM gateway accepted the request but the upstream model timed out before returning JSON.";
+  if (kind === "cloudflare_timeout") return "Cloudflare timed out waiting for the Worker/upstream response.";
+  return "The LLM gateway returned an upstream error for " + endpoint + ".";
 }
 
 function parseJsonFromModel(value) {
@@ -2660,6 +2766,13 @@ function diagnosticFromResult(result) {
 }
 
 function classifyGatewayError(result) {
+  const kind = depotFailureKind(result);
+  if (kind === "route_missing") return "Gateway route missing";
+  if (kind === "model_missing") return "Model unavailable";
+  if (kind === "upstream_timeout") return "Upstream timeout";
+  if (kind === "cloudflare_timeout") return "Cloudflare timeout";
+  if (kind === "gateway_unreachable") return "Gateway unreachable";
+  if (kind === "auth_failed") return "Authentication failed";
   if (result.status === 0) return "Gateway unreachable";
   if (result.status === 401 || result.status === 403) return "Authentication failed";
   if (result.status === 404) return "Endpoint or model unavailable";

@@ -183,7 +183,80 @@ test('depot notes generation reports endpoint diagnostics on gateway failure', a
     assert.equal(response.status, 404);
     assert.equal(body.endpoint, '/v1/json');
     assert.equal(body.status, 404);
-    assert.match(body.diagnostic, /gateway supports \/v1\/json/);
+    assert.equal(body.failureKind, 'route_missing');
+    assert.match(body.diagnostic, /does not serve \/v1\/json/);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('depot notes generation reports upstream timeout separately', async () => {
+  const originalFetch = global.fetch;
+  global.fetch = async () => new Response(JSON.stringify({ error: 'Timeout' }), { status: 504 });
+
+  try {
+    const response = await handleRequest(
+      new Request('https://example.test/depot-notes/generate', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ transcript: 'Customer confirmed tower access.' }),
+      }),
+      {
+        DAEDALUS_LLM_GATEWAY_URL: 'https://gateway.example',
+        DAEDALUS_LLM_API_KEY: 'test-key',
+        DAEDALUS_LLM_MODEL: 'test-model',
+      },
+    );
+    const body = await response.json();
+
+    assert.equal(response.status, 504);
+    assert.equal(body.endpoint, '/v1/json');
+    assert.equal(body.failureKind, 'upstream_timeout');
+    assert.match(body.diagnostic, /upstream model timed out/);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('depot notes debug reports route and configured model without secrets', async () => {
+  const originalFetch = global.fetch;
+  const calls = [];
+  global.fetch = async (url) => {
+    const pathname = new URL(url).pathname;
+    calls.push(pathname);
+    if (pathname.endsWith('/health')) {
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }
+    if (pathname.endsWith('/models')) {
+      return new Response(JSON.stringify({ defaultModel: 'test-model', models: [{ name: 'test-model' }] }), { status: 200 });
+    }
+    if (pathname.endsWith('/v1/json')) {
+      return new Response(JSON.stringify({ json: { ok: true } }), { status: 200 });
+    }
+    return new Response(JSON.stringify({ error: 'not found' }), { status: 404 });
+  };
+
+  try {
+    const response = await handleRequest(
+      new Request('https://example.test/depot-notes/debug?admin_key=secret'),
+      {
+        ADMIN_KEY: 'secret',
+        DAEDALUS_LLM_GATEWAY_URL: 'https://gateway.example/private',
+        DAEDALUS_LLM_API_KEY: 'test-key',
+        DAEDALUS_LLM_MODEL: 'test-model',
+      },
+    );
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.ok, true);
+    assert.equal(body.route, '/v1/json');
+    assert.equal(body.config.gatewayOrigin, 'https://gateway.example');
+    assert.equal(body.config.apiKeyConfigured, true);
+    assert.equal(body.config.model, 'test-model');
+    assert.equal(body.models.configuredModelAvailable, true);
+    assert.deepEqual(calls, ['/private/health', '/private/models', '/private/v1/json']);
+    assert.doesNotMatch(JSON.stringify(body), /test-key/);
   } finally {
     global.fetch = originalFetch;
   }
