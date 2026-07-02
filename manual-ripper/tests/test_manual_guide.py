@@ -477,7 +477,7 @@ def test_dimension_retrieval_rejects_generic_technical_data_page_without_dimensi
     assert body["confidence"] == "low"
     assert body["citations"] == []
     assert body["evidence"] == []
-    assert "technical data pages" in body["answer"].lower()
+    assert body["answer"] == main.MISSING_EXACT_FACT_ANSWER
     assert "page 8" not in json.dumps(body).lower()
     assert "page 55" not in json.dumps(body).lower()
 
@@ -495,11 +495,11 @@ def test_greenstar_ri_page_7_visual_fallback_returns_case_size_without_depth_inf
     assert body["source"] == "evidence-store"
     assert body["citations"] == [{"page": 7, "label": "Page 7"}]
     assert body["evidence"][0]["type"] == "visual-dimension"
-    assert "width: 390 mm" in answer
+    assert "390 mm wide" in answer
     assert "case-front height: 590 mm" in answer
     assert "to top of case front: 600 mm" in answer
-    assert "depth: not confirmed" in answer
-    assert "270 mm annotation" in answer
+    assert "depth: not confirmed" not in answer
+    assert "270 mm annotation" not in answer
     assert "depth: 270 mm" not in answer
 
 

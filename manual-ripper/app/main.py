@@ -452,7 +452,22 @@ def classify_question_intent(question: str) -> str:
     return "generic"
 
 
+def is_locator_question(question: str) -> bool:
+    lowered = question.lower()
+    return any(term in lowered for term in (
+        "where is the information",
+        "where is this information",
+        "where did that come from",
+        "what page",
+        "which page",
+        "mentioned on page",
+        "where is it mentioned",
+    ))
+
+
 def requires_direct_fact_answer(question: str) -> bool:
+    if is_locator_question(question):
+        return False
     return classify_question_intent(question) in DIRECT_FACT_INTENTS
 
 
@@ -898,6 +913,9 @@ def manual_metadata_score(manual: dict[str, Any], terms: list[str]) -> int:
 def specific_manual_terms(query: str) -> list[str]:
     lowered = query.lower()
     terms: list[str] = []
+    model_match = re.search(r"\b(\d+)\s*ri\b", lowered)
+    if model_match:
+        terms.append(f"{model_match.group(1)}ri")
     if re.search(r"\b(?:\d+\s*)?ri\b", lowered):
         terms.append("ri")
     return terms
@@ -1253,6 +1271,8 @@ def deterministic_dimension_answer(manual_id: str, pages: list[dict[str, Any]], 
 
 
 def deterministic_answer(manual_id: str, question: str) -> dict[str, Any] | None:
+    if is_locator_question(question) and not is_visual_question(question):
+        return None
     stored = answer_from_evidence_store(manual_id, question)
     if stored:
         return stored
