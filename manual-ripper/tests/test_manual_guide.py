@@ -54,11 +54,14 @@ def seed_manual(manual_id="greenstar-ri"):
             "page": 12,
             "text": (
                 "Greenstar Ri ErP technical data. Appliance dimensions H x W x D "
-                "600 mm x 390 mm x 270 mm. Overall dimensions are listed in millimetres."
+                "600 mm x 390 mm x 270 mm. Lift weight 27.4 kg. "
+                "Packaged appliance weight 31 kg. Overall dimensions are listed in millimetres."
             ),
             "layout_blocks": [],
             "tables": [
-                {"type": "table-row", "text": "Appliance dimensions H x W x D 600 mm x 390 mm x 270 mm"}
+                {"type": "table-row", "text": "Appliance dimensions H x W x D 600 mm x 390 mm x 270 mm"},
+                {"type": "table-row", "text": "Lift weight 27.4 kg"},
+                {"type": "table-row", "text": "Packaged appliance weight 31 kg"},
             ],
             "key_values": [],
             "assets": {"thumbnail_url": f"/manuals/{manual_id}/assets/page-12-thumb.png"},
@@ -169,9 +172,10 @@ def seed_greenstar_15ri_weight_manual(manual_id="greenstar-15ri"):
     pages = [
         {
             "page": 8,
-            "text": "Greenstar 15Ri technical data. Total appliance weight 27.4 kg. Packaged appliance weight 31 kg.",
+            "text": "Greenstar 15Ri technical data. Lift weight 27.4 kg. Total appliance weight 27.4 kg. Packaged appliance weight 31 kg.",
             "layout_blocks": [],
             "tables": [
+                {"type": "table-row", "text": "Lift weight 27.4 kg"},
                 {"type": "table-row", "text": "Total appliance weight 27.4 kg"},
                 {"type": "table-row", "text": "Packaged appliance weight 31 kg"},
             ],
@@ -220,13 +224,16 @@ def seed_manual_with_flue_tables(manual_id="greenstar-ri-flue"):
         {
             "page": 28,
             "text": (
-                "Flue length table. Maximum horizontal flue length - 10 m. "
-                "90 degree elbow equivalent length reduction - 1 m."
+                "Extended horizontal flue. Maximum flue length (mm) 60/100 80/125. "
+                "Extended horizontal flue 4,600 13,000. Notice: Effective flue lengths: "
+                "each 90 degree bend is equivalent to 2 metres of straight flue; "
+                "each 45 degree bend is equivalent to 1 metre of straight flue."
             ),
             "layout_blocks": [],
             "tables": [
-                {"type": "table-row", "text": "Maximum horizontal flue length - 10 m"},
-                {"type": "table-row", "text": "90 degree elbow equivalent length reduction - 1 m"},
+                {"type": "table-row", "text": "Extended horizontal flue maximum flue length (mm) 60/100 80/125 4,600 13,000"},
+                {"type": "table-row", "text": "Each 90 degree bend is equivalent to 2 metres of straight flue"},
+                {"type": "table-row", "text": "Each 45 degree bend is equivalent to 1 metre of straight flue"},
             ],
             "key_values": [],
             "assets": {"thumbnail_url": f"/manuals/{manual_id}/assets/page-28-thumb.png"},
@@ -404,9 +411,10 @@ def test_greenstar_ri_erp_dimensions_are_answered_with_visual_evidence(tmp_path,
 
     assert response.status_code == 200
     body = response.json()
-    assert "Height: 600 mm" in body["answer"]
-    assert "Width: 390 mm" in body["answer"]
-    assert "Depth: 270 mm" in body["answer"]
+    assert "600 mm tall" in body["answer"]
+    assert "390 mm wide" in body["answer"]
+    assert "270 mm deep" in body["answer"]
+    assert "Best matching manual text" not in body["answer"]
     assert body["confidence"] == "high"
     assert body["citations"] == [{"page": 12, "label": "Page 12"}]
     assert body["evidence"][0]["type"] == "dimension"
@@ -600,7 +608,7 @@ def test_global_15ri_weight_uses_weight_fact_not_part_l_text(tmp_path, monkeypat
     body = response.json()
     assert body["manual_id"] == "greenstar-15ri"
     assert body["source"] == "typed-weight-facts"
-    assert "27.4 kg" in body["answer"]
+    assert body["answer"] == "Lift weight: 27.4 kg; packaged: 31 kg"
     assert "Approved Documents" not in body["answer"]
     assert all(item["category"] == "weight" for item in body["evidence"])
     assert body["citations"] == [{"page": 8, "label": "Page 8"}]
@@ -617,11 +625,16 @@ def test_global_ri_width_query_uses_matching_boiler_manual_not_unrelated_docs(tm
     assert response.status_code == 200
     body = response.json()
     assert body["manual_id"] == "greenstar-ri"
-    assert "Width: 390 mm" in body["answer"]
-    assert body["citations"][0]["page"] in {7, 12}
+    assert "600 mm tall" in body["answer"]
+    assert "390 mm wide" in body["answer"]
+    assert "270 mm deep" in body["answer"]
+    assert "Lift weight: 27.4 kg; packaged: 31 kg" in body["answer"]
+    assert body["citations"][0]["page"] == 12
     assert all(item["manual_id"] == "greenstar-ri" for item in body["evidence"])
     assert "Shower" not in body["answer"]
     assert "building regulations" not in body["answer"].lower()
+    assert "Best matching manual text" not in body["answer"]
+    assert "Match count" not in body["answer"]
 
 
 def test_global_specific_ri_query_rejects_unrelated_global_results(tmp_path, monkeypatch):
@@ -633,7 +646,7 @@ def test_global_specific_ri_query_rejects_unrelated_global_results(tmp_path, mon
 
     assert response.status_code == 200
     body = response.json()
-    assert body["answer"] == "I could not find relevant evidence for that in the selected/manual context."
+    assert body["answer"] == main.MISSING_EXACT_FACT_ANSWER
     assert body["confidence"] == "low"
     assert body["evidence"] == []
     assert body["citations"] == []
@@ -649,7 +662,7 @@ def test_terminal_clearance_opening_answers_from_matching_table_row(tmp_path, mo
     assert response.status_code == 200
     body = response.json()
     assert body["source"] == "typed-table-facts"
-    assert "300 mm" in body["answer"]
+    assert body["answer"] == "Terminal clearance to openable window or air vent: 300 mm"
     assert "150 mm" not in body["answer"]
     assert body["citations"] == [{"page": 20, "label": "Page 20"}]
     assert body["evidence"][0]["type"] == "terminal_clearance"
@@ -678,7 +691,7 @@ def test_terminal_clearance_corner_answers_from_matching_table_row(tmp_path, mon
     assert response.status_code == 200
     body = response.json()
     assert body["source"] == "typed-table-facts"
-    assert "150 mm" in body["answer"]
+    assert body["answer"] == "Terminal clearance internal or external corner/change of fabric: 150 mm"
     assert "300 mm" not in body["answer"]
     assert body["citations"] == [{"page": 20, "label": "Page 20"}]
     assert body["evidence"][0]["type"] == "terminal_clearance"
@@ -726,11 +739,11 @@ def test_max_flue_length_with_90_elbows_uses_flue_facts_not_clearance_table(tmp_
     assert response.status_code == 200
     body = response.json()
     assert body["source"] == "typed-table-facts"
-    assert "Maximum flue length: 10" in body["answer"]
-    assert "90 degree elbows reduce" in body["answer"]
-    assert "1" in body["answer"]
+    assert "Maximum flue length: 4.6 m for 60/100; 13 m for 80/125" in body["answer"]
+    assert "Bend deductions: 45° = 1 m; 90° = 2 m" in body["answer"]
     assert body["citations"] == [{"page": 28, "label": "Page 28"}]
     assert all(item["category"] == "flue_length" for item in body["evidence"])
+    assert all(item["value"] is not None and item["unit"] for item in body["evidence"])
     assert "300 mm" not in body["answer"]
     assert "150 mm" not in body["answer"]
     assert "Best matching manual text" not in body["answer"]

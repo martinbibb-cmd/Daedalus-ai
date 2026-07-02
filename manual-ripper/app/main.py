@@ -17,7 +17,9 @@ from pydantic import BaseModel
 
 
 APP_VERSION = "manual-ripper-0.4-guide"
-EVIDENCE_SCHEMA_VERSION = "evidence-store-v2"
+EVIDENCE_SCHEMA_VERSION = "evidence-store-v3"
+MISSING_EXACT_FACT_ANSWER = "I don’t have that exact fact extracted yet."
+DIRECT_FACT_INTENTS = {"dimensions", "weight", "max_flue_length", "terminal_clearance"}
 MAX_UPLOAD_BYTES = int(os.getenv("MANUAL_RIPPER_MAX_UPLOAD_BYTES", str(30 * 1024 * 1024)))
 AI_SUPPORT_ROOT_ENV = os.getenv("AI_SUPPORT_ROOT")
 AI_SUPPORT_ROOT = Path(AI_SUPPORT_ROOT_ENV or "/srv/daedalus")
@@ -450,6 +452,34 @@ def classify_question_intent(question: str) -> str:
     return "generic"
 
 
+def requires_direct_fact_answer(question: str) -> bool:
+    return classify_question_intent(question) in DIRECT_FACT_INTENTS
+
+
+def direct_fact_missing_answer(manual_id: str | None = None) -> dict[str, Any]:
+    return {
+        "answer": MISSING_EXACT_FACT_ANSWER,
+        "manual_id": manual_id,
+        "citations": [],
+        "confidence": "low",
+        "evidence": [],
+        "visual_assets": [],
+        "deterministic": True,
+        "missing_exact_fact": True,
+        "source": "direct-fact-missing",
+    }
+
+
+def format_scalar(value: Any) -> str:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if number.is_integer():
+        return str(int(number))
+    return f"{number:g}"
+
+
 def page_table_rows(page: dict[str, Any]) -> list[str]:
     rows: list[str] = []
     for table in page.get("tables", []):
@@ -552,14 +582,52 @@ def parse_terminal_clearance_facts(manual: dict[str, Any], page: dict[str, Any],
     return [obj]
 
 
-def parse_flue_fact(manual: dict[str, Any], page: dict[str, Any], row_text: str) -> dict[str, Any] | None:
+def length_value_to_m(value_text: str, unit: str) -> float:
+    value = float(value_text.replace(",", ""))
+    if unit.lower() == "mm":
+        return value / 1000
+    return value
+
+
+def flue_length_fact(
+    manual: dict[str, Any],
+    page_number: int,
+    row_text: str,
+    field: str,
+    condition: str,
+    value_m: float,
+) -> dict[str, Any]:
+    obj = evidence_object(
+        manual,
+        category="flue_length",
+        field=field,
+        value=value_m,
+        unit="m",
+        source_page=page_number,
+        source_type="table-row",
+        confidence="high",
+        validation_status="validated",
+        evidence_text=row_text,
+    )
+    obj.update({
+        "type": "max_flue_length",
+        "condition": condition,
+        "value_m": value_m,
+        "units": "m",
+        "table_reference": f"Page {page_number} flue length table",
+    })
+    return obj
+
+
+def parse_flue_facts(manual: dict[str, Any], page: dict[str, Any], row_text: str) -> list[dict[str, Any]]:
     lowered = row_text.lower()
     if "flue" not in lowered and "elbow" not in lowered and "bend" not in lowered:
-        return None
+        return []
     page_number = int(page["page"])
-    elbow_match = re.search(r"\b(?P<angle>45|90)\D{0,12}(?:elbow|bend)\b.*?(?P<value>\d+(?:\.\d+)?)\s*m\b", row_text, re.I)
+    facts: list[dict[str, Any]] = []
+    elbow_match = re.search(r"\b(?P<angle>45|90)\D{0,12}(?:elbow|bend)\b.*?(?P<value>\d+(?:\.\d+)?)\s*(?:m|metres?|meters?)\b", row_text, re.I)
     if not elbow_match:
-        elbow_match = re.search(r"\b(?P<value>\d+(?:\.\d+)?)\s*m\b.*?\b(?P<angle>45|90)\D{0,12}(?:elbow|bend)\b", row_text, re.I)
+        elbow_match = re.search(r"\b(?P<value>\d+(?:\.\d+)?)\s*(?:m|metres?|meters?)\b.*?\b(?P<angle>45|90)\D{0,12}(?:elbow|bend)\b", row_text, re.I)
     if elbow_match and any(term in lowered for term in ("equivalent", "deduct", "reduce", "reduction", "allowance", "de-rating", "derating")):
         angle = int(elbow_match.group("angle"))
         value = float(elbow_match.group("value"))
@@ -582,36 +650,55 @@ def parse_flue_fact(manual: dict[str, Any], page: dict[str, Any], row_text: str)
             "units": "m",
             "table_reference": f"Page {page_number} flue length table",
         })
-        return obj
+        facts.append(obj)
 
     if "clearance" in lowered or "terminal position" in lowered or re.search(r"\b(window|opening|corner|boundary)\b", lowered):
-        return None
+        return facts
     if not any(term in lowered for term in ("maximum", "max", "length")):
-        return None
-    length_match = re.search(r"(?P<value>\d+(?:\.\d+)?)\s*m\b", row_text, re.I)
-    if not length_match:
-        return None
-    value = float(length_match.group("value"))
-    obj = evidence_object(
-        manual,
-        category="flue_length",
-        field="maximum_flue_length",
-        value=value,
-        unit="m",
-        source_page=page_number,
-        source_type="table-row",
-        confidence="high",
-        validation_status="validated",
-        evidence_text=row_text,
+        return facts
+
+    if "60/100" in row_text and "80/125" in row_text:
+        numeric_lengths = re.findall(r"\b\d{1,3},\d{3}\b|\b\d{4,5}\b", row_text)
+        if len(numeric_lengths) >= 2:
+            facts.extend([
+                flue_length_fact(manual, page_number, row_text, "maximum_flue_length_60_100", "60/100", length_value_to_m(numeric_lengths[0], "mm")),
+                flue_length_fact(manual, page_number, row_text, "maximum_flue_length_80_125", "80/125", length_value_to_m(numeric_lengths[1], "mm")),
+            ])
+            return facts
+
+    dual_match = re.search(
+        r"60\s*/\s*100\D{0,40}(?P<small>\d{1,3}(?:,\d{3})|\d+(?:\.\d+)?)\s*(?P<small_unit>mm|m)?\D{0,80}"
+        r"80\s*/\s*125\D{0,40}(?P<large>\d{1,3}(?:,\d{3})|\d+(?:\.\d+)?)\s*(?P<large_unit>mm|m)?",
+        row_text,
+        re.I,
     )
-    obj.update({
-        "type": "max_flue_length",
-        "condition": "maximum flue length",
-        "value_m": value,
-        "units": "m",
-        "table_reference": f"Page {page_number} flue length table",
-    })
-    return obj
+    if not dual_match:
+        dual_match = re.search(
+            r"(?P<small>\d{1,3}(?:,\d{3})|\d+(?:\.\d+)?)\s*(?P<small_unit>mm|m)?\D{0,40}"
+            r"(?P<large>\d{1,3}(?:,\d{3})|\d+(?:\.\d+)?)\s*(?P<large_unit>mm|m)?",
+            row_text,
+            re.I,
+        ) if "60/100" in row_text and "80/125" in row_text else None
+    if dual_match:
+        small_unit = dual_match.group("small_unit") or "mm"
+        large_unit = dual_match.group("large_unit") or "mm"
+        facts.extend([
+            flue_length_fact(manual, page_number, row_text, "maximum_flue_length_60_100", "60/100", length_value_to_m(dual_match.group("small"), small_unit)),
+            flue_length_fact(manual, page_number, row_text, "maximum_flue_length_80_125", "80/125", length_value_to_m(dual_match.group("large"), large_unit)),
+        ])
+        return facts
+
+    length_match = re.search(r"(?P<value>\d+(?:\.\d+)?)\s*(?P<unit>m|mm)\b", row_text, re.I)
+    if not length_match:
+        return facts
+    value = length_value_to_m(length_match.group("value"), length_match.group("unit"))
+    facts.append(flue_length_fact(manual, page_number, row_text, "maximum_flue_length", "maximum flue length", value))
+    return facts
+
+
+def parse_flue_fact(manual: dict[str, Any], page: dict[str, Any], row_text: str) -> dict[str, Any] | None:
+    facts = parse_flue_facts(manual, page, row_text)
+    return facts[0] if facts else None
 
 
 def build_table_fact_evidence(manual: dict[str, Any], pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -619,7 +706,7 @@ def build_table_fact_evidence(manual: dict[str, Any], pages: list[dict[str, Any]
     seen: set[tuple[str, str, int, str]] = set()
     for page in pages:
         for row in page_table_rows(page):
-            row_facts = [*parse_terminal_clearance_facts(manual, page, row), parse_flue_fact(manual, page, row)]
+            row_facts = [*parse_terminal_clearance_facts(manual, page, row), *parse_flue_facts(manual, page, row)]
             for fact in row_facts:
                 if not fact:
                     continue
@@ -848,7 +935,7 @@ def query_terms(query: str) -> list[str]:
             terms.extend([model_match.group(1), f"{model_match.group(1)}ri"])
     if any(term in lowered for term in ("weight", "heavy", "weigh", "lift weight", "appliance weight")):
         terms.extend(["weight", "heavy", "appliance", "lift", "total"])
-    if any(term in lowered for term in ("dimension", "dimensions", "size", "height", "width", "wide", "depth", "h x w", "hxw")):
+    if any(term in lowered for term in ("dimension", "dimensions", "size", "big", "height", "width", "wide", "depth", "h x w", "hxw")):
         terms.extend(tokenize(" ".join(DIMENSION_TERMS)))
         if "wide" in lowered:
             terms.extend(["width", "appliance"])
@@ -954,7 +1041,7 @@ def evidence_from_page(manual_id: str, page: dict[str, Any], snippet: str, evide
 
 def is_dimension_question(question: str) -> bool:
     lowered = question.lower()
-    return any(term in lowered for term in ("dimension", "dimensions", "size", "height", "width", "wide", "depth", "h x w", "hxw"))
+    return any(term in lowered for term in ("dimension", "dimensions", "size", "big", "height", "width", "wide", "depth", "h x w", "hxw"))
 
 
 def is_visual_likely_question(question: str) -> bool:
@@ -1171,7 +1258,7 @@ def deterministic_answer(manual_id: str, question: str) -> dict[str, Any] | None
         return stored
     pages = load_pages(manual_id)
     if is_dimension_question(question):
-        return deterministic_dimension_answer(manual_id, pages, question)
+        return direct_fact_missing_answer(manual_id)
     if is_visual_question(question):
         return deterministic_visual_answer(manual_id, question)
     return None
@@ -1203,6 +1290,41 @@ def evidence_object_to_response(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def supported_fact(item: dict[str, Any]) -> bool:
+    return bool(
+        item.get("manual_id")
+        and item.get("source_page")
+        and (item.get("evidence_text") or item.get("bbox") or item.get("image_region"))
+        and (item.get("category") or item.get("type"))
+        and item.get("value") is not None
+        and item.get("unit")
+    )
+
+
+def direct_fact_response(
+    manual_id: str,
+    answer: str,
+    selected: list[dict[str, Any]],
+    source: str,
+    confidence: str = "high",
+) -> dict[str, Any] | None:
+    selected = [item for item in selected if supported_fact(item)]
+    if not selected:
+        return None
+    pages = sorted({int(item["source_page"]) for item in selected})
+    return {
+        "answer": answer,
+        "manual_id": manual_id,
+        "citations": [{"page": page, "label": f"Page {page}"} for page in pages],
+        "confidence": confidence,
+        "evidence": [evidence_object_to_response(item) for item in selected],
+        "evidence_objects": selected,
+        "visual_assets": [{"page": page, "url": public_page_image_path(manual_id, page), "thumbnail_url": public_page_image_path(manual_id, page)} for page in pages],
+        "deterministic": True,
+        "source": source,
+    }
+
+
 def answer_terminal_clearance_from_facts(manual_id: str, question: str) -> dict[str, Any] | None:
     facts = [
         item for item in evidence_for_category(manual_id, "terminal_clearance")
@@ -1231,19 +1353,12 @@ def answer_terminal_clearance_from_facts(manual_id: str, question: str) -> dict[
     if not matches:
         return None
     fact = matches[0]
-    page = int(fact["source_page"])
-    evidence = [evidence_object_to_response(fact)]
-    return {
-        "answer": f"Terminal clearance {requested}: {fact['value']} {fact.get('unit') or 'mm'}.\n\nSource: Page {page}, table row: {fact.get('evidence_text')}",
-        "manual_id": manual_id,
-        "citations": [{"page": page, "label": f"Page {page}"}],
-        "confidence": "high",
-        "evidence": evidence,
-        "evidence_objects": [fact],
-        "visual_assets": [{"page": page, "url": public_page_image_path(manual_id, page), "thumbnail_url": public_page_image_path(manual_id, page)}],
-        "deterministic": True,
-        "source": "typed-table-facts",
-    }
+    return direct_fact_response(
+        manual_id,
+        f"Terminal clearance {requested}: {format_scalar(fact['value'])} {fact.get('unit') or 'mm'}",
+        [fact],
+        "typed-table-facts",
+    )
 
 
 def answer_flue_length_from_facts(manual_id: str, question: str) -> dict[str, Any] | None:
@@ -1260,38 +1375,31 @@ def answer_flue_length_from_facts(manual_id: str, question: str) -> dict[str, An
     if not max_facts and not elbow_facts:
         return None
 
-    selected = []
+    selected: list[dict[str, Any]] = []
     lines: list[str] = []
     if max_facts:
-        fact = max_facts[0]
-        selected.append(fact)
-        lines.append(f"Maximum flue length: {fact['value']} {fact.get('unit') or 'm'}.")
-    if "elbow" in lowered or "90" in lowered:
-        ninety = [item for item in elbow_facts if "90" in str(item.get("field") or item.get("condition") or "")]
-        if ninety:
-            fact = ninety[0]
-            selected.append(fact)
-            lines.append(f"90 degree elbows reduce the available straight flue length by {fact['value']} {fact.get('unit') or 'm'} per elbow/equivalent-length allowance.")
+        by_condition = {str(item.get("condition") or item.get("field")): item for item in max_facts}
+        if "60/100" in by_condition and "80/125" in by_condition:
+            small = by_condition["60/100"]
+            large = by_condition["80/125"]
+            selected.extend([small, large])
+            lines.append(f"Maximum flue length: {format_scalar(small['value'])} m for 60/100; {format_scalar(large['value'])} m for 80/125")
         else:
-            lines.append("I found the flue length row, but no reliable 90 degree elbow equivalent-length row in the structured table facts.")
+            fact = max_facts[0]
+            selected.append(fact)
+            lines.append(f"Maximum flue length: {format_scalar(fact['value'])} {fact.get('unit') or 'm'}")
+    if "elbow" in lowered or "bend" in lowered or "90" in lowered or "45" in lowered or max_facts:
+        forty_five = next((item for item in elbow_facts if "45" in str(item.get("field") or item.get("condition") or "")), None)
+        ninety = next((item for item in elbow_facts if "90" in str(item.get("field") or item.get("condition") or "")), None)
+        if forty_five and ninety:
+            selected.extend([forty_five, ninety])
+            lines.append(f"Bend deductions: 45\u00b0 = {format_scalar(forty_five['value'])} m; 90\u00b0 = {format_scalar(ninety['value'])} m")
+        elif "elbow" in lowered or "bend" in lowered or "90" in lowered or "45" in lowered:
+            return None
     if not lines:
         return None
-
-    pages = sorted({int(item["source_page"]) for item in selected})
-    if pages:
-        lines.append("\nSource: " + ", ".join(f"Page {page}" for page in pages))
-    evidence = [evidence_object_to_response(item) for item in selected]
-    return {
-        "answer": "\n".join(lines),
-        "manual_id": manual_id,
-        "citations": [{"page": page, "label": f"Page {page}"} for page in pages],
-        "confidence": "high" if selected else "medium",
-        "evidence": evidence,
-        "evidence_objects": selected,
-        "visual_assets": [{"page": page, "url": public_page_image_path(manual_id, page), "thumbnail_url": public_page_image_path(manual_id, page)} for page in pages],
-        "deterministic": True,
-        "source": "typed-table-facts",
-    }
+    deduped = list({str(item.get("id") or (item.get("field"), item.get("source_page"), item.get("value"))): item for item in selected}.values())
+    return direct_fact_response(manual_id, "\n".join(lines), deduped, "typed-table-facts")
 
 
 def answer_weight_from_facts(manual_id: str, question: str) -> dict[str, Any] | None:
@@ -1315,45 +1423,32 @@ def answer_weight_from_facts(manual_id: str, question: str) -> dict[str, Any] | 
             break
     if not selected:
         selected = facts[0]
+    packaged = next((item for item in facts if item.get("field") == "packaged_appliance_weight"), None)
+    lift = next((item for item in facts if item.get("field") == "lift_weight"), None)
+    total = next((item for item in facts if item.get("field") == "total_appliance_weight"), None)
+    if ("lift" in lowered or "heavy" in lowered or "weigh" in lowered) and (lift or total):
+        base = lift or total
+        selected_facts = [base]
+        answer = f"Lift weight: {format_scalar(base['value'])} {base.get('unit') or 'kg'}"
+        if packaged:
+            selected_facts.append(packaged)
+            answer += f"; packaged: {format_scalar(packaged['value'])} {packaged.get('unit') or 'kg'}"
+        return direct_fact_response(manual_id, answer, selected_facts, "typed-weight-facts")
     label = {
         "total_appliance_weight": "Total appliance weight",
         "lift_weight": "Lift weight",
         "packaged_appliance_weight": "Packaged appliance weight",
     }.get(str(selected.get("field")), "Appliance weight")
-    page = int(selected["source_page"])
-    evidence = [evidence_object_to_response(selected)]
-    return {
-        "answer": f"{label}: {selected['value']} {selected.get('unit') or 'kg'}.\n\nSource: Page {page}, evidence: {selected.get('evidence_text')}",
-        "manual_id": manual_id,
-        "citations": [{"page": page, "label": f"Page {page}"}],
-        "confidence": "high",
-        "evidence": evidence,
-        "evidence_objects": [selected],
-        "visual_assets": [{"page": page, "url": public_page_image_path(manual_id, page), "thumbnail_url": public_page_image_path(manual_id, page)}],
-        "deterministic": True,
-        "source": "typed-weight-facts",
-    }
+    return direct_fact_response(
+        manual_id,
+        f"{label}: {format_scalar(selected['value'])} {selected.get('unit') or 'kg'}",
+        [selected],
+        "typed-weight-facts",
+    )
 
 
 def no_structured_fact_answer(manual_id: str, intent: str) -> dict[str, Any]:
-    if intent == "terminal_clearance":
-        answer = "I could not find a reliable terminal-clearance table row for that condition. I will not answer terminal clearances from general paragraph text."
-    elif intent == "max_flue_length":
-        answer = "I could not find a reliable flue-length table row for that question. I will not answer maximum flue length from terminal-position clearance tables."
-    elif intent == "weight":
-        answer = "I could not find a reliable appliance-weight fact in the structured manual data. I will not answer weight from unrelated page text."
-    else:
-        answer = "I could not find reliable structured manual facts for that question."
-    return {
-        "answer": answer,
-        "manual_id": manual_id,
-        "citations": [],
-        "confidence": "low",
-        "evidence": [],
-        "visual_assets": [],
-        "deterministic": True,
-        "source": "typed-table-facts",
-    }
+    return direct_fact_missing_answer(manual_id)
 
 
 def answer_from_evidence_store(manual_id: str, question: str) -> dict[str, Any] | None:
@@ -1421,37 +1516,44 @@ def answer_from_evidence_store(manual_id: str, question: str) -> dict[str, Any] 
         by_field = high_text_dimensions
 
     answer_lines: list[str] = []
+    if "height" in by_field and by_field["height"].get("value") is not None:
+        answer_lines.append(f"{format_scalar(by_field['height']['value'])} {by_field['height'].get('unit') or 'mm'} tall")
+    elif "case_front_height" in by_field:
+        answer_lines.append(f"Case-front height: {format_scalar(by_field['case_front_height']['value'])} {by_field['case_front_height'].get('unit') or 'mm'}")
     if "width" in by_field and by_field["width"].get("value") is not None:
-        answer_lines.append(f"Width: {by_field['width']['value']} {by_field['width'].get('unit') or ''}".strip())
-    if "case_front_height" in by_field:
-        answer_lines.append(f"Case-front height: {by_field['case_front_height']['value']} {by_field['case_front_height'].get('unit') or ''}".strip())
-    elif "height" in by_field and by_field["height"].get("value") is not None:
-        answer_lines.append(f"Height: {by_field['height']['value']} {by_field['height'].get('unit') or ''}".strip())
+        answer_lines.append(f"{format_scalar(by_field['width']['value'])} {by_field['width'].get('unit') or 'mm'} wide")
     if "top_of_case_front" in by_field:
-        answer_lines.append(f"To top of case front: {by_field['top_of_case_front']['value']} {by_field['top_of_case_front'].get('unit') or ''}".strip())
+        answer_lines.append(f"To top of case front: {format_scalar(by_field['top_of_case_front']['value'])} {by_field['top_of_case_front'].get('unit') or 'mm'}")
     if "depth" in by_field:
         depth = by_field["depth"]
         if depth.get("validation_status") == "validated" and depth.get("value") is not None:
-            answer_lines.append(f"Depth: {depth['value']} {depth.get('unit') or ''}".strip())
-        else:
-            answer_lines.append(depth.get("notes") or "Depth: not confirmed.")
+            answer_lines.append(f"{format_scalar(depth['value'])} {depth.get('unit') or 'mm'} deep")
 
-    source_pages = sorted({int(item["source_page"]) for item in by_field.values() if item.get("source_page")})
-    if source_pages:
-        answer_lines.append("\nSource: " + ", ".join(f"Page {page}" for page in source_pages))
+    selected_dimensions = list(by_field.values())
+    if {"height", "width", "depth"}.issubset(by_field):
+        weight_facts = [
+            item for item in evidence_for_category(manual_id, "weight")
+            if item.get("validation_status") == "validated"
+        ]
+        lift = next((item for item in weight_facts if item.get("field") == "lift_weight"), None)
+        total = next((item for item in weight_facts if item.get("field") == "total_appliance_weight"), None)
+        packaged = next((item for item in weight_facts if item.get("field") == "packaged_appliance_weight"), None)
+        if lift or total:
+            base = lift or total
+            selected_dimensions.append(base)
+            weight_line = f"Lift weight: {format_scalar(base['value'])} {base.get('unit') or 'kg'}"
+            if packaged:
+                selected_dimensions.append(packaged)
+                weight_line += f"; packaged: {format_scalar(packaged['value'])} {packaged.get('unit') or 'kg'}"
+            answer_lines.append(weight_line)
 
-    response_evidence = [evidence_object_to_response(item) for item in by_field.values()]
-    return {
-        "answer": "\n".join(answer_lines) if answer_lines else "Stored evidence exists, but no answerable dimension fields are validated.",
-        "manual_id": manual_id,
-        "citations": [{"page": page, "label": f"Page {page}"} for page in source_pages],
-        "confidence": "high" if all(item.get("confidence") == "high" for item in by_field.values() if item.get("validation_status") == "validated") else "medium",
-        "evidence": response_evidence,
-        "evidence_objects": list(by_field.values()),
-        "visual_assets": [{"page": page, "url": public_page_image_path(manual_id, page), "thumbnail_url": public_page_image_path(manual_id, page)} for page in source_pages],
-        "deterministic": True,
-        "source": "evidence-store",
-    }
+    return direct_fact_response(
+        manual_id,
+        "\n".join(answer_lines) if answer_lines else MISSING_EXACT_FACT_ANSWER,
+        selected_dimensions,
+        "evidence-store",
+        "high" if all(item.get("confidence") == "high" for item in selected_dimensions if item.get("validation_status") == "validated") else "medium",
+    ) or direct_fact_missing_answer(manual_id)
 
 
 def is_visual_question(question: str) -> bool:
@@ -1737,6 +1839,8 @@ def query_manual(manual_id: str, request: QueryRequest) -> dict[str, Any]:
             "evidence": [],
             "visual_assets": [],
         }
+    if requires_direct_fact_answer(request.question):
+        return direct_fact_missing_answer(manual_id)
     extractive = extractive_answer_from_results(request.question, evidence)
     if extractive:
         return {"manual_id": manual_id, **extractive}
@@ -1760,15 +1864,16 @@ def query_manual(manual_id: str, request: QueryRequest) -> dict[str, Any]:
 def query_all_manuals(request: QueryRequest) -> dict[str, Any]:
     evidence = search_pages(request.question, manual_id=None, limit=request.limit)
     if not evidence:
-        return no_relevant_manual_answer()
+        return direct_fact_missing_answer(None) if requires_direct_fact_answer(request.question) else no_relevant_manual_answer()
 
     intent_terms = specific_manual_terms(request.question)
     if intent_terms:
         evidence = [item for item in evidence if matches_specific_manual_intent(item, intent_terms)]
         if not evidence:
-            return no_relevant_manual_answer()
+            return direct_fact_missing_answer(None) if requires_direct_fact_answer(request.question) else no_relevant_manual_answer()
 
     checked_manuals: set[str] = set()
+    saw_direct_fact_candidate = False
     for item in evidence:
         manual_id = item.get("manual_id")
         if not manual_id or manual_id in checked_manuals:
@@ -1776,7 +1881,13 @@ def query_all_manuals(request: QueryRequest) -> dict[str, Any]:
         checked_manuals.add(manual_id)
         deterministic = deterministic_answer(manual_id, request.question)
         if deterministic:
+            if deterministic.get("missing_exact_fact") and requires_direct_fact_answer(request.question):
+                saw_direct_fact_candidate = True
+                continue
             return {"manual_id": manual_id, **deterministic}
+
+    if requires_direct_fact_answer(request.question):
+        return direct_fact_missing_answer(next(iter(checked_manuals), None) if saw_direct_fact_candidate else None)
 
     extractive = extractive_answer_from_results(request.question, evidence)
     if extractive:
