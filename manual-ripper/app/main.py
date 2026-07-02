@@ -879,6 +879,25 @@ def evidence_for_category(manual_id: str, category: str) -> list[dict[str, Any]]
     return [item for item in index.get("evidence", []) if item.get("category") == category]
 
 
+def candidate_page_numbers(evidence: list[dict[str, Any]]) -> list[int]:
+    return list(dict.fromkeys(int(item["page"]) for item in evidence if item.get("page")))
+
+
+def build_verified_page_facts(manual_id: str, page_numbers: list[int] | None = None) -> list[dict[str, Any]]:
+    manual = get_manual_or_404(manual_id)
+    wanted = set(page_numbers or [])
+    pages = [
+        page for page in load_pages(manual_id)
+        if not wanted or int(page.get("page", 0)) in wanted
+    ]
+    return build_dimension_evidence(manual, pages) + build_table_fact_evidence(manual, pages) + build_weight_evidence(manual, pages)
+
+
+def facts_for_category(manual_id: str, category: str, facts: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+    source = facts if facts is not None else evidence_for_category(manual_id, category)
+    return [item for item in source if item.get("category") == category]
+
+
 def tokenize(text: str) -> list[str]:
     return [token for token in re.findall(r"[a-z0-9]{3,}", text.lower()) if token not in {"the", "and", "for", "with", "that", "this"}]
 
@@ -1270,10 +1289,52 @@ def deterministic_dimension_answer(manual_id: str, pages: list[dict[str, Any]], 
     }
 
 
-def deterministic_answer(manual_id: str, question: str) -> dict[str, Any] | None:
+def direct_fact_debug(
+    manual_id: str,
+    page_numbers: list[int],
+    extracted_facts: list[dict[str, Any]],
+    rejected_documents: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    def fact_signature(item: dict[str, Any]) -> tuple[Any, ...]:
+        return (
+            item.get("category"),
+            item.get("field"),
+            item.get("type"),
+            item.get("condition"),
+            str(item.get("value")),
+            item.get("unit"),
+            int(item.get("source_page") or 0),
+        )
+
+    cached = [
+        item for item in load_evidence_index(manual_id).get("evidence", [])
+        if not page_numbers or int(item.get("source_page") or 0) in set(page_numbers)
+    ]
+    cached_signatures = {fact_signature(item) for item in cached if item.get("validation_status") == "validated"}
+    page_signatures = {fact_signature(item) for item in extracted_facts if item.get("validation_status") == "validated"}
+    return {
+        "selected_document": manual_id,
+        "rejected_documents": rejected_documents or [],
+        "selected_pages": page_numbers,
+        "extracted_facts": [evidence_object_to_response(item) for item in extracted_facts],
+        "index_stale": cached_signatures != page_signatures,
+    }
+
+
+def deterministic_answer(
+    manual_id: str,
+    question: str,
+    page_numbers: list[int] | None = None,
+    rejected_documents: list[dict[str, Any]] | None = None,
+) -> dict[str, Any] | None:
     if is_locator_question(question) and not is_visual_question(question):
         return None
-    stored = answer_from_evidence_store(manual_id, question)
+    facts_override = None
+    debug = None
+    if requires_direct_fact_answer(question):
+        facts_override = build_verified_page_facts(manual_id, page_numbers)
+        debug = direct_fact_debug(manual_id, page_numbers or [], facts_override, rejected_documents)
+    stored = answer_from_evidence_store(manual_id, question, facts_override, debug)
     if stored:
         return stored
     pages = load_pages(manual_id)
@@ -1327,12 +1388,13 @@ def direct_fact_response(
     selected: list[dict[str, Any]],
     source: str,
     confidence: str = "high",
+    debug: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     selected = [item for item in selected if supported_fact(item)]
     if not selected:
         return None
     pages = sorted({int(item["source_page"]) for item in selected})
-    return {
+    response = {
         "answer": answer,
         "manual_id": manual_id,
         "citations": [{"page": page, "label": f"Page {page}"} for page in pages],
@@ -1343,11 +1405,14 @@ def direct_fact_response(
         "deterministic": True,
         "source": source,
     }
+    if debug is not None:
+        response["debug"] = {**debug, "final_facts_used": [evidence_object_to_response(item) for item in selected]}
+    return response
 
 
-def answer_terminal_clearance_from_facts(manual_id: str, question: str) -> dict[str, Any] | None:
+def answer_terminal_clearance_from_facts(manual_id: str, question: str, facts_override: list[dict[str, Any]] | None = None, debug: dict[str, Any] | None = None) -> dict[str, Any] | None:
     facts = [
-        item for item in evidence_for_category(manual_id, "terminal_clearance")
+        item for item in facts_for_category(manual_id, "terminal_clearance", facts_override)
         if item.get("validation_status") == "validated" and item.get("source_type") == "table-row"
     ]
     if not facts:
@@ -1366,6 +1431,7 @@ def answer_terminal_clearance_from_facts(manual_id: str, question: str) -> dict[
                 "visual_assets": [],
                 "deterministic": True,
                 "source": "typed-table-facts",
+                "debug": debug or {},
             }
         return None
 
@@ -1378,12 +1444,13 @@ def answer_terminal_clearance_from_facts(manual_id: str, question: str) -> dict[
         f"Terminal clearance {requested}: {format_scalar(fact['value'])} {fact.get('unit') or 'mm'}",
         [fact],
         "typed-table-facts",
+        debug=debug,
     )
 
 
-def answer_flue_length_from_facts(manual_id: str, question: str) -> dict[str, Any] | None:
+def answer_flue_length_from_facts(manual_id: str, question: str, facts_override: list[dict[str, Any]] | None = None, debug: dict[str, Any] | None = None) -> dict[str, Any] | None:
     facts = [
-        item for item in evidence_for_category(manual_id, "flue_length")
+        item for item in facts_for_category(manual_id, "flue_length", facts_override)
         if item.get("validation_status") == "validated" and item.get("source_type") == "table-row"
     ]
     if not facts:
@@ -1419,12 +1486,12 @@ def answer_flue_length_from_facts(manual_id: str, question: str) -> dict[str, An
     if not lines:
         return None
     deduped = list({str(item.get("id") or (item.get("field"), item.get("source_page"), item.get("value"))): item for item in selected}.values())
-    return direct_fact_response(manual_id, "\n".join(lines), deduped, "typed-table-facts")
+    return direct_fact_response(manual_id, "\n".join(lines), deduped, "typed-table-facts", debug=debug)
 
 
-def answer_weight_from_facts(manual_id: str, question: str) -> dict[str, Any] | None:
+def answer_weight_from_facts(manual_id: str, question: str, facts_override: list[dict[str, Any]] | None = None, debug: dict[str, Any] | None = None) -> dict[str, Any] | None:
     facts = [
-        item for item in evidence_for_category(manual_id, "weight")
+        item for item in facts_for_category(manual_id, "weight", facts_override)
         if item.get("validation_status") == "validated"
     ]
     if not facts:
@@ -1453,7 +1520,7 @@ def answer_weight_from_facts(manual_id: str, question: str) -> dict[str, Any] | 
         if packaged:
             selected_facts.append(packaged)
             answer += f"; packaged: {format_scalar(packaged['value'])} {packaged.get('unit') or 'kg'}"
-        return direct_fact_response(manual_id, answer, selected_facts, "typed-weight-facts")
+        return direct_fact_response(manual_id, answer, selected_facts, "typed-weight-facts", debug=debug)
     label = {
         "total_appliance_weight": "Total appliance weight",
         "lift_weight": "Lift weight",
@@ -1464,6 +1531,7 @@ def answer_weight_from_facts(manual_id: str, question: str) -> dict[str, Any] | 
         f"{label}: {format_scalar(selected['value'])} {selected.get('unit') or 'kg'}",
         [selected],
         "typed-weight-facts",
+        debug=debug,
     )
 
 
@@ -1471,7 +1539,7 @@ def no_structured_fact_answer(manual_id: str, intent: str) -> dict[str, Any]:
     return direct_fact_missing_answer(manual_id)
 
 
-def answer_from_evidence_store(manual_id: str, question: str) -> dict[str, Any] | None:
+def answer_from_evidence_store(manual_id: str, question: str, facts_override: list[dict[str, Any]] | None = None, debug: dict[str, Any] | None = None) -> dict[str, Any] | None:
     lowered = question.lower()
     page_match = re.search(r"\bpage\s+(\d{1,3})\b", lowered)
     if page_match and any(term in lowered for term in ("show", "open", "image", "picture", "display", "give me the page")):
@@ -1500,17 +1568,17 @@ def answer_from_evidence_store(manual_id: str, question: str) -> dict[str, Any] 
 
     intent = classify_question_intent(question)
     if intent == "terminal_clearance":
-        return answer_terminal_clearance_from_facts(manual_id, question) or no_structured_fact_answer(manual_id, intent)
+        return answer_terminal_clearance_from_facts(manual_id, question, facts_override, debug) or no_structured_fact_answer(manual_id, intent)
     if intent == "max_flue_length":
-        return answer_flue_length_from_facts(manual_id, question) or no_structured_fact_answer(manual_id, intent)
+        return answer_flue_length_from_facts(manual_id, question, facts_override, debug) or no_structured_fact_answer(manual_id, intent)
     if intent == "weight":
-        return answer_weight_from_facts(manual_id, question) or no_structured_fact_answer(manual_id, intent)
+        return answer_weight_from_facts(manual_id, question, facts_override, debug) or no_structured_fact_answer(manual_id, intent)
 
     dimension_requested = is_dimension_question(question) or any(term in lowered for term in ("where did that come from", "open the diagram", "show me the page"))
     if not dimension_requested:
         return None
 
-    dimension_evidence = evidence_for_category(manual_id, "dimensions")
+    dimension_evidence = facts_for_category(manual_id, "dimensions", facts_override)
     if not dimension_evidence:
         return None
 
@@ -1552,7 +1620,7 @@ def answer_from_evidence_store(manual_id: str, question: str) -> dict[str, Any] 
     selected_dimensions = list(by_field.values())
     if {"height", "width", "depth"}.issubset(by_field):
         weight_facts = [
-            item for item in evidence_for_category(manual_id, "weight")
+            item for item in facts_for_category(manual_id, "weight", facts_override)
             if item.get("validation_status") == "validated"
         ]
         lift = next((item for item in weight_facts if item.get("field") == "lift_weight"), None)
@@ -1573,6 +1641,7 @@ def answer_from_evidence_store(manual_id: str, question: str) -> dict[str, Any] 
         selected_dimensions,
         "evidence-store",
         "high" if all(item.get("confidence") == "high" for item in selected_dimensions if item.get("validation_status") == "validated") else "medium",
+        debug=debug,
     ) or direct_fact_missing_answer(manual_id)
 
 
@@ -1845,6 +1914,14 @@ def manual_asset(manual_id: str, asset_id: str) -> FileResponse:
 @app.post("/manuals/{manual_id}/query")
 def query_manual(manual_id: str, request: QueryRequest) -> dict[str, Any]:
     get_manual_or_404(manual_id)
+    if requires_direct_fact_answer(request.question):
+        locator_evidence = search_pages(request.question, manual_id=manual_id, limit=request.limit)
+        page_numbers = candidate_page_numbers(locator_evidence)
+        if not page_numbers:
+            return direct_fact_missing_answer(manual_id)
+        deterministic = deterministic_answer(manual_id, request.question, page_numbers=page_numbers)
+        return {"manual_id": manual_id, **(deterministic or direct_fact_missing_answer(manual_id))}
+
     deterministic = deterministic_answer(manual_id, request.question)
     if deterministic:
         return {"manual_id": manual_id, **deterministic}
@@ -1859,8 +1936,6 @@ def query_manual(manual_id: str, request: QueryRequest) -> dict[str, Any]:
             "evidence": [],
             "visual_assets": [],
         }
-    if requires_direct_fact_answer(request.question):
-        return direct_fact_missing_answer(manual_id)
     extractive = extractive_answer_from_results(request.question, evidence)
     if extractive:
         return {"manual_id": manual_id, **extractive}
@@ -1899,7 +1974,18 @@ def query_all_manuals(request: QueryRequest) -> dict[str, Any]:
         if not manual_id or manual_id in checked_manuals:
             continue
         checked_manuals.add(manual_id)
-        deterministic = deterministic_answer(manual_id, request.question)
+        manual_pages = candidate_page_numbers([candidate for candidate in evidence if candidate.get("manual_id") == manual_id])
+        rejected_documents = [
+            {
+                "manual_id": candidate.get("manual_id"),
+                "manual": candidate.get("manual"),
+                "page": candidate.get("page"),
+                "reason": "lower ranked locator result",
+            }
+            for candidate in evidence
+            if candidate.get("manual_id") and candidate.get("manual_id") != manual_id
+        ]
+        deterministic = deterministic_answer(manual_id, request.question, page_numbers=manual_pages, rejected_documents=rejected_documents)
         if deterministic:
             if deterministic.get("missing_exact_fact") and requires_direct_fact_answer(request.question):
                 saw_direct_fact_candidate = True

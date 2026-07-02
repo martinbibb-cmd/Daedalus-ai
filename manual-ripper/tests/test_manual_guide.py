@@ -1,4 +1,5 @@
 import json
+import re
 import sqlite3
 import sys
 from datetime import datetime, timezone
@@ -612,6 +613,48 @@ def test_global_15ri_weight_uses_weight_fact_not_part_l_text(tmp_path, monkeypat
     assert "Approved Documents" not in body["answer"]
     assert all(item["category"] == "weight" for item in body["evidence"])
     assert body["citations"] == [{"page": 8, "label": "Page 8"}]
+
+
+def test_direct_fact_answers_use_page_reader_not_locator_snippet(tmp_path, monkeypatch):
+    configure_storage(tmp_path, monkeypatch)
+    manual_id = seed_manual_with_flue_tables()
+    original_search_pages = main.search_pages
+
+    def misleading_locator(query, manual_id=None, limit=10):
+        results = original_search_pages(query, manual_id=manual_id, limit=limit)
+        for item in results:
+            if item["page"] == 20:
+                item["snippet"] = "Misleading search snippet says terminal clearance to an opening is 600 mm."
+                item["description"] = item["snippet"]
+        return results
+
+    monkeypatch.setattr(main, "search_pages", misleading_locator)
+    client = TestClient(main.app)
+
+    response = client.post(f"/manuals/{manual_id}/query", json={"question": "What is the terminal clearance to an openable window?", "limit": 5})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["answer"] == "Terminal clearance to openable window or air vent: 300 mm"
+    assert "600 mm" not in body["answer"]
+    assert body["debug"]["selected_pages"] == [20]
+    assert body["debug"]["final_facts_used"][0]["value"] == 300
+
+
+def test_direct_fact_answer_numbers_have_fact_objects(tmp_path, monkeypatch):
+    configure_storage(tmp_path, monkeypatch)
+    manual_id = seed_manual()
+    client = TestClient(main.app)
+
+    response = client.post(f"/manuals/{manual_id}/query", json={"question": "How big is the Ri?", "limit": 5})
+
+    assert response.status_code == 200
+    body = response.json()
+    numbers = re.findall(r"\d+(?:\.\d+)?", body["answer"])
+    fact_values = {str(item["value"]).rstrip("0").rstrip(".") for item in body["evidence"] if item.get("value") is not None}
+    assert numbers
+    assert all(number.rstrip("0").rstrip(".") in fact_values for number in numbers)
+    assert all(item.get("manual_id") and item.get("page") and item.get("snippet") and item.get("type") and item.get("unit") for item in body["evidence"])
 
 
 def test_global_ri_width_query_uses_matching_boiler_manual_not_unrelated_docs(tmp_path, monkeypatch):
