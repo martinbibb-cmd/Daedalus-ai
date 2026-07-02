@@ -91,10 +91,12 @@ test('depot notes page renders editable section cards instead of one blob', asyn
   assert.equal(response.status, 200);
   assert.match(html, /Depot Notes/);
   assert.match(html, /Safe access at height/);
-  assert.match(html, /Installer notes — boiler\/controls/);
+  assert.match(html, /Installer notes \u2014 boiler\/controls/);
   assert.match(html, /Copy/);
   assert.match(html, /Request changes to this section/);
   assert.match(html, /Apply change/);
+  assert.match(html, /No depot notes generated yet/);
+  assert.match(html, /Endpoint: /);
   assert.doesNotMatch(html, /one giant combined text block/);
 });
 
@@ -110,4 +112,91 @@ test('depot notes endpoints require gateway configuration', async () => {
 
   assert.equal(response.status, 500);
   assert.equal((await response.json()).error, 'LLM gateway is not configured');
+});
+
+test('depot notes generation uses supported json gateway endpoint', async () => {
+  const originalFetch = global.fetch;
+  let calledPath = '';
+  let requestBody = null;
+  global.fetch = async (url, init) => {
+    calledPath = new URL(url).pathname;
+    requestBody = JSON.parse(init.body);
+    return new Response(
+      JSON.stringify({
+        json: {
+          sections: [
+            {
+              heading: 'Safe access at height',
+              text: 'Tower required for high flue; customer confirmed side gate access',
+            },
+          ],
+        },
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    );
+  };
+
+  try {
+    const response = await handleRequest(
+      new Request('https://example.test/depot-notes/generate', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ transcript: 'Customer confirmed tower required for high flue and side gate access.' }),
+      }),
+      {
+        DAEDALUS_LLM_GATEWAY_URL: 'https://gateway.example',
+        DAEDALUS_LLM_API_KEY: 'test-key',
+        DAEDALUS_LLM_MODEL: 'test-model',
+      },
+    );
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(calledPath, '/v1/json');
+    assert.equal(requestBody.prompt.includes('Customer confirmed tower required'), true);
+    assert.equal(body.sections[0].heading, 'Safe access at height');
+    assert.equal(body.sections[0].text, 'Tower required for high flue; customer confirmed side gate access');
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('depot notes generation reports endpoint diagnostics on gateway failure', async () => {
+  const originalFetch = global.fetch;
+  global.fetch = async () => new Response(JSON.stringify({ error: 'route not found' }), { status: 404 });
+
+  try {
+    const response = await handleRequest(
+      new Request('https://example.test/depot-notes/generate', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ transcript: 'Customer confirmed tower access.' }),
+      }),
+      {
+        DAEDALUS_LLM_GATEWAY_URL: 'https://gateway.example',
+        DAEDALUS_LLM_API_KEY: 'test-key',
+        DAEDALUS_LLM_MODEL: 'test-model',
+      },
+    );
+    const body = await response.json();
+
+    assert.equal(response.status, 404);
+    assert.equal(body.endpoint, '/v1/json');
+    assert.equal(body.status, 404);
+    assert.match(body.diagnostic, /gateway supports \/v1\/json/);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('public chat keeps manual context for ambiguous follow-ups', async () => {
+  const response = await handleRequest(new Request('https://example.test/chat'), {});
+  const html = await response.text();
+
+  assert.match(html, /boilerGuideContext/);
+  assert.match(html, /current_manual_id/);
+  assert.match(html, /function rewriteQuestion/);
+  assert.match(html, /appliance weight lift weight/);
+  assert.match(html, /fetch\("\/manuals\/" \+ encodeURIComponent\(manualId\) \+ "\/query"/);
+  assert.match(html, /I could not find relevant evidence for that in the selected\/manual context/);
 });

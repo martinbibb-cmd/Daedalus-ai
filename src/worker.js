@@ -286,7 +286,8 @@ const PUBLIC_CHAT_PAGE = `<!doctype html>
   </main>
   <script>
     const state = {
-      history: JSON.parse(sessionStorage.getItem("boilerGuideHistory") || "[]")
+      history: JSON.parse(sessionStorage.getItem("boilerGuideHistory") || "[]"),
+      context: JSON.parse(sessionStorage.getItem("boilerGuideContext") || "{}")
     };
     const messages = document.getElementById("messages");
     const form = document.getElementById("chat-form");
@@ -295,6 +296,90 @@ const PUBLIC_CHAT_PAGE = `<!doctype html>
 
     function saveHistory() {
       sessionStorage.setItem("boilerGuideHistory", JSON.stringify(state.history.slice(-40)));
+      sessionStorage.setItem("boilerGuideContext", JSON.stringify(state.context || {}));
+    }
+
+    function queryTerms(text) {
+      return String(text || "").toLowerCase().match(/[a-z0-9]{3,}/g) || [];
+    }
+
+    function isAmbiguousFollowUp(text) {
+      const terms = queryTerms(text).filter((term) => !["how", "about", "what", "the", "and", "for", "with", "that", "this"].includes(term));
+      return terms.length <= 3 && Boolean(state.context && state.context.current_manual_id);
+    }
+
+    function rewriteQuestion(text) {
+      if (!isAmbiguousFollowUp(text)) return text;
+      const terms = queryTerms(text);
+      const focus = terms.includes("weight")
+        ? "appliance weight lift weight"
+        : terms.includes("height")
+          ? "appliance height dimensions"
+          : text;
+      return [
+        state.context.current_manual_name || "",
+        state.context.current_subject || "",
+        focus
+      ].filter(Boolean).join(" ");
+    }
+
+    function usefulResult(payload) {
+      if (!payload || payload.error) return false;
+      const answer = String(payload.answer || "").toLowerCase();
+      if (!answer || answer.includes("no relevant manual evidence")) return false;
+      return Array.isArray(payload.evidence) && payload.evidence.length > 0;
+    }
+
+    function updateContext(questionText, payload) {
+      if (!payload || !usefulResult(payload)) return;
+      const evidence = Array.isArray(payload.evidence) ? payload.evidence : [];
+      const firstEvidence = evidence.find((item) => item.manual_id) || {};
+      const citations = Array.isArray(payload.citations) ? payload.citations : [];
+      state.context = {
+        current_manual_id: payload.manual_id || firstEvidence.manual_id || state.context.current_manual_id || null,
+        current_manual_name: firstEvidence.manual || state.context.current_manual_name || "",
+        current_subject: queryTerms(questionText).filter((term) => !["what", "where", "about", "tell"].includes(term)).slice(0, 8).join(" "),
+        last_citations: citations,
+        last_query_terms: queryTerms(questionText)
+      };
+    }
+
+    async function queryManualGuide(originalText) {
+      const rewritten = rewriteQuestion(originalText);
+      const manualId = state.context && state.context.current_manual_id;
+      if (manualId) {
+        const manualResponse = await fetch("/manuals/" + encodeURIComponent(manualId) + "/query", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ question: rewritten, limit: 6 })
+        });
+        const manualData = await manualResponse.json().catch(() => ({}));
+        if (manualResponse.ok && usefulResult(manualData)) {
+          manualData.rewritten_question = rewritten;
+          return manualData;
+        }
+        if (isAmbiguousFollowUp(originalText)) {
+          return {
+            answer: "I could not find relevant evidence for that in the selected/manual context.",
+            confidence: "low",
+            manual_id: manualId,
+            citations: [],
+            evidence: [],
+            visual_assets: [],
+            rejected_global_fallback: true
+          };
+        }
+      }
+
+      const response = await fetch("/manuals/query", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ question: rewritten, limit: 6 })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) return { answer: data.error || data.detail || "Manual search failed.", confidence: "low" };
+      data.rewritten_question = rewritten;
+      return data;
     }
 
     function evidenceUrl(item) {
@@ -322,7 +407,7 @@ const PUBLIC_CHAT_PAGE = `<!doctype html>
           const citationRow = document.createElement("div");
           citationRow.className = "citations";
           for (const citation of citations.slice(0, 6)) {
-            const href = evidenceUrl(citation);
+            const href = evidenceUrl({ ...citation, manual_id: citation.manual_id || payload.manual_id });
             if (!href) continue;
             const link = document.createElement("a");
             link.href = href;
@@ -379,13 +464,8 @@ const PUBLIC_CHAT_PAGE = `<!doctype html>
       appendMessage(userTurn.role, userTurn.payload);
       saveHistory();
       try {
-        const response = await fetch("/manuals/query", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ question: text, limit: 6 })
-        });
-        const data = await response.json().catch(() => ({}));
-        const payload = response.ok ? data : { answer: data.error || data.detail || "Manual search failed.", confidence: "low" };
+        const payload = await queryManualGuide(text);
+        updateContext(text, payload);
         state.history.push({ role: "assistant", payload });
         appendMessage("assistant", payload);
         saveHistory();
@@ -416,12 +496,12 @@ const DEPOT_NOTE_HEADINGS = [
   "External hazardous work areas / ladder / scaffold / specific hazards",
   "Additional delivery notes",
   "Office notes",
-  "Installer notes — boiler/controls",
-  "Installer notes — flue",
-  "Installer notes — gas/water",
-  "Installer notes — disruption",
-  "Installer notes — customer agreed actions",
-  "Installer notes — special customer requirements / planned home improvement work",
+  "Installer notes \u2014 boiler/controls",
+  "Installer notes \u2014 flue",
+  "Installer notes \u2014 gas/water",
+  "Installer notes \u2014 disruption",
+  "Installer notes \u2014 customer agreed actions",
+  "Installer notes \u2014 special customer requirements / planned home improvement work",
 ];
 
 const DEPOT_NOTES_PAGE = `<!doctype html>
@@ -521,6 +601,21 @@ const DEPOT_NOTES_PAGE = `<!doctype html>
       gap: 12px;
     }
 
+    .empty-state,
+    .error-panel {
+      padding: 12px;
+      border: 1px solid #d7dedb;
+      border-radius: 8px;
+      background: #f8faf9;
+      color: #627083;
+    }
+
+    .error-panel {
+      border-color: #f2b8b5;
+      background: #fff4f3;
+      color: #7d2621;
+    }
+
     .note-card {
       display: grid;
       gap: 10px;
@@ -574,6 +669,17 @@ const DEPOT_NOTES_PAGE = `<!doctype html>
         border-color: #344052;
       }
 
+      .empty-state {
+        background: #10151b;
+        border-color: #344052;
+      }
+
+      .error-panel {
+        background: #2a1718;
+        border-color: #6f3030;
+        color: #ffd7d4;
+      }
+
       button.secondary {
         background: #263241;
         color: #edf2f7;
@@ -617,6 +723,38 @@ const DEPOT_NOTES_PAGE = `<!doctype html>
 
     function setStatus(text) {
       statusEl.textContent = text;
+    }
+
+    function showEmpty() {
+      notes.clear();
+      cards.textContent = "";
+      const empty = document.createElement("div");
+      empty.className = "empty-state";
+      empty.textContent = "No depot notes generated yet.";
+      cards.appendChild(empty);
+    }
+
+    function showError(data, fallback, clearCards = true) {
+      if (clearCards) {
+        notes.clear();
+        cards.textContent = "";
+      }
+      const existing = cards.querySelector(".error-panel");
+      if (existing) existing.remove();
+      const panel = document.createElement("div");
+      panel.className = "error-panel";
+      const endpoint = data && data.endpoint ? data.endpoint : "unknown";
+      const status = data && data.status ? String(data.status) : "unknown";
+      const diagnostic = data && data.diagnostic
+        ? data.diagnostic
+        : "Check the Worker gateway endpoint and model configuration, then retry.";
+      panel.textContent = (data && (data.error || data.detail)) || fallback || "Generation failed";
+      panel.appendChild(document.createElement("br"));
+      panel.appendChild(document.createTextNode("Endpoint: " + endpoint + " | Status: " + status));
+      panel.appendChild(document.createElement("br"));
+      panel.appendChild(document.createTextNode("Next: " + diagnostic));
+      cards.prepend(panel);
+      setStatus((data && (data.error || data.detail)) || fallback || "Generation failed");
     }
 
     function renderCards(sections) {
@@ -668,7 +806,10 @@ const DEPOT_NOTES_PAGE = `<!doctype html>
               })
             });
             const data = await response.json().catch(() => ({}));
-            if (!response.ok) throw new Error(data.error || data.detail || "Revision failed");
+            if (!response.ok) {
+              showError(data, "Revision failed", false);
+              return;
+            }
             notes.set(heading, data.text || "Not mentioned");
             text.textContent = notes.get(heading);
             change.value = "";
@@ -703,17 +844,20 @@ const DEPOT_NOTES_PAGE = `<!doctype html>
           body: JSON.stringify({ transcript: text })
         });
         const data = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(data.error || data.detail || "Generation failed");
+        if (!response.ok) {
+          showError(data, "Generation failed");
+          return;
+        }
         renderCards(Array.isArray(data.sections) ? data.sections : []);
         setStatus("Generated " + headings.length + " editable sections.");
       } catch (error) {
-        setStatus(error.message || "Generation failed");
+        showError({ error: error.message || "Generation failed" }, "Generation failed");
       } finally {
         generate.disabled = false;
       }
     });
 
-    renderCards(headings.map((heading) => ({ heading, text: "Not mentioned" })));
+    showEmpty();
   </script>
 </body>
 </html>`;
@@ -2174,20 +2318,23 @@ async function handleDepotNotesGenerate(request, env) {
     transcript,
   ].join("\n");
 
-  const result = await gatewayFetch(env, "/v1/chat", {
+  const endpoint = "/v1/json";
+  const result = await gatewayFetch(env, endpoint, {
     method: "POST",
     auth: true,
     body: {
       model: env.DAEDALUS_LLM_MODEL,
-      message: prompt,
+      prompt,
       temperature: 0,
-      system: "You generate concise depot-compatible job notes as strict JSON.",
+      schema: {
+        sections: DEPOT_NOTE_HEADINGS.map((heading) => ({ heading, text: "string" })),
+      },
     },
     timeoutMs: 45000,
   });
 
   if (!result.ok) {
-    return json({ error: classifyGatewayError(result), safeBody: safeGatewayBody(result.body) }, result.status || 502);
+    return json(depotGatewayDiagnostic(result, endpoint), result.status || 502);
   }
 
   return json({ sections: normalizeDepotSections(extractGatewayResponse(result.body)) });
@@ -2230,20 +2377,21 @@ async function handleDepotNotesRevise(request, env) {
     transcript,
   ].join("\n");
 
-  const result = await gatewayFetch(env, "/v1/chat", {
+  const endpoint = "/v1/json";
+  const result = await gatewayFetch(env, endpoint, {
     method: "POST",
     auth: true,
     body: {
       model: env.DAEDALUS_LLM_MODEL,
-      message: prompt,
+      prompt,
       temperature: 0,
-      system: "You revise one depot-note section as strict JSON without inventing facts.",
+      schema: { heading, text: "string" },
     },
     timeoutMs: 45000,
   });
 
   if (!result.ok) {
-    return json({ error: classifyGatewayError(result), safeBody: safeGatewayBody(result.body) }, result.status || 502);
+    return json(depotGatewayDiagnostic(result, endpoint), result.status || 502);
   }
 
   const parsed = parseJsonFromModel(extractGatewayResponse(result.body));
@@ -2270,9 +2418,19 @@ function sanitizeDepotText(value) {
   if (!text) return "Not mentioned";
   return text
     .split(/\r?\n+/)
-    .map((line) => line.replace(/^[\s*•-]+/, "").trim())
+    .map((line) => line.replace(/^[\s*\u2022-]+/, "").trim())
     .filter(Boolean)
     .join("; ");
+}
+
+function depotGatewayDiagnostic(result, endpoint) {
+  return {
+    error: classifyGatewayError(result),
+    endpoint,
+    status: result.status || 0,
+    diagnostic: "Verify the gateway supports " + endpoint + " and the configured model is available.",
+    safeBody: safeGatewayBody(result.body),
+  };
 }
 
 function parseJsonFromModel(value) {
