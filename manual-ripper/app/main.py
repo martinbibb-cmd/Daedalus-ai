@@ -52,7 +52,7 @@ DETERMINISTIC_TOPICS = {
     "pressure": ["pressure", "bar", "water pressure", "gas pressure"],
     "frost": ["frost", "frost protection", "frost function", "low temperature"],
 }
-VISUAL_INTENT_TERMS = ("show me", "show", "diagram", "exploded", "image", "picture", "where is", "give me the page", "what page", "open", "table")
+VISUAL_INTENT_TERMS = ("show me", "show", "diagram", "exploded", "image", "picture", "give me the page", "what page", "open", "table")
 VISUAL_FALLBACK_TOPICS = ("dimension", "dimensions", "size", "clearance", "clearances", "pipe layout", "pipe work", "wiring", "diagram", "exploded")
 QUESTION_INTENTS = {
     "dimensions",
@@ -475,8 +475,8 @@ def parse_terminal_clearance_facts(manual: dict[str, Any], page: dict[str, Any],
         return []
     page_number = int(page["page"])
     patterns = [
-        ("to openable window or air vent", r"(?P<text>.{0,90}(?:opening|openable|window|air vent|ventilation opening).{0,90}?(?P<value>\d{2,4})\s*mm)"),
-        ("internal or external corner/change of fabric", r"(?P<text>.{0,90}(?:internal\s+or\s+external\s+corner|external\s+or\s+internal\s+corner|internal.*?corner|external.*?corner|change\s+of\s+fabric).{0,90}?(?P<value>\d{2,4})\s*mm)"),
+        ("to openable window or air vent", r"(?P<text>(?:terminal\s+clearance\s+to\s+)?(?:an\s+)?(?:opening|openable|window|air vent|ventilation opening)[^.:\n;]{0,90}?(?P<value>\d{2,4})\s*mm)"),
+        ("internal or external corner/change of fabric", r"(?P<text>(?:terminal\s+clearance\s+to\s+)?(?:an\s+)?(?:internal\s+or\s+external\s+corner|external\s+or\s+internal\s+corner|internal[^.:\n;]{0,40}?corner|external[^.:\n;]{0,40}?corner|change\s+of\s+fabric)[^.:\n;]{0,90}?(?P<value>\d{2,4})\s*mm)"),
     ]
     facts: list[dict[str, Any]] = []
     seen_conditions: set[str] = set()
@@ -1391,6 +1391,7 @@ def deterministic_visual_answer(manual_id: str, question: str) -> dict[str, Any]
             if item.get("asset_url")
         ],
         "deterministic": True,
+        "source": "visual-search",
     }
 
 
