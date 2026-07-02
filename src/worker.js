@@ -1,4 +1,4 @@
-const APP_VERSION = "hitchhikers-guide-to-boilers-v0.4";
+const APP_VERSION = "hitchhikers-guide-to-boilers-v0.5";
 const DEFAULT_TIMEOUT_MS = 30000;
 
 const MODES = new Set([
@@ -10,12 +10,400 @@ const MODES = new Set([
   "manual-ripper",
 ]);
 
-const CHAT_PAGE = `<!doctype html>
+const WELCOME_PAGE = `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Hitchhiker's Guide to Boilers</title>
+  <title>The Hitchhiker's Guide to Boilers</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100dvh;
+      display: grid;
+      place-items: center;
+      background: #f6f1df;
+      color: #1f2933;
+    }
+
+    main {
+      width: min(760px, calc(100vw - 32px));
+      display: grid;
+      gap: 28px;
+      text-align: center;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(38px, 9vw, 82px);
+      line-height: 0.95;
+      letter-spacing: 0;
+    }
+
+    .panic {
+      margin: 0;
+      color: #0f766e;
+      font-size: clamp(42px, 12vw, 110px);
+      font-weight: 900;
+      letter-spacing: 0;
+    }
+
+    a {
+      justify-self: center;
+      min-width: 132px;
+      padding: 14px 24px;
+      border-radius: 8px;
+      background: #17202a;
+      color: #ffffff;
+      text-decoration: none;
+      font-weight: 800;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      body {
+        background: #141813;
+        color: #f4f1df;
+      }
+
+      a {
+        background: #f4f1df;
+        color: #141813;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>The Hitchhiker's Guide to Boilers</h1>
+    <p class="panic">DON'T PANIC</p>
+    <a href="/chat">Enter</a>
+  </main>
+</body>
+</html>`;
+
+const PUBLIC_CHAT_PAGE = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Boiler Guide Chat</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.5;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100dvh;
+      background: #eef3f1;
+      color: #17202a;
+    }
+
+    main {
+      min-height: 100dvh;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+    }
+
+    header {
+      padding: 16px max(16px, calc((100vw - 920px) / 2));
+      background: #ffffff;
+      border-bottom: 1px solid #d7dedb;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 22px;
+      letter-spacing: 0;
+    }
+
+    .messages {
+      min-height: 0;
+      overflow: auto;
+      display: grid;
+      align-content: start;
+      gap: 14px;
+      padding: 18px max(16px, calc((100vw - 920px) / 2)) 120px;
+    }
+
+    .message {
+      max-width: min(760px, 92vw);
+      display: grid;
+      gap: 10px;
+      padding: 14px;
+      border: 1px solid #d7dedb;
+      border-radius: 8px;
+      background: #ffffff;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    .message.user {
+      justify-self: end;
+      background: #dff3ee;
+      border-color: #9bd5c9;
+    }
+
+    .message.assistant {
+      justify-self: start;
+    }
+
+    .meta,
+    .citations {
+      color: #627083;
+      font-size: 13px;
+    }
+
+    .citations,
+    .evidence {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .citations a {
+      color: #146c5c;
+      font-weight: 750;
+    }
+
+    .evidence-card {
+      width: 150px;
+      display: grid;
+      gap: 6px;
+      padding: 8px;
+      border: 1px solid #d7dedb;
+      border-radius: 8px;
+      background: #f8faf9;
+      color: inherit;
+      text-decoration: none;
+      font-size: 12px;
+    }
+
+    .evidence-card img {
+      width: 100%;
+      aspect-ratio: 4 / 3;
+      object-fit: contain;
+      border: 1px solid #d7dedb;
+      border-radius: 6px;
+      background: #ffffff;
+    }
+
+    form {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      padding: 14px max(16px, calc((100vw - 920px) / 2));
+      background: rgba(255, 255, 255, 0.96);
+      border-top: 1px solid #d7dedb;
+    }
+
+    textarea {
+      min-height: 48px;
+      max-height: 140px;
+      resize: vertical;
+      padding: 12px;
+      border: 1px solid #b9c5c0;
+      border-radius: 8px;
+      font: inherit;
+      background: #ffffff;
+      color: inherit;
+    }
+
+    button {
+      min-height: 48px;
+      padding: 0 20px;
+      border: 0;
+      border-radius: 8px;
+      background: #146c5c;
+      color: #ffffff;
+      font: inherit;
+      font-weight: 800;
+      cursor: pointer;
+    }
+
+    button:disabled {
+      cursor: wait;
+      opacity: 0.65;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      body {
+        background: #10151b;
+        color: #edf2f7;
+      }
+
+      header,
+      .message,
+      form,
+      textarea {
+        background: #171d25;
+        border-color: #344052;
+      }
+
+      .message.user {
+        background: #123b35;
+        border-color: #1c665b;
+      }
+
+      .evidence-card {
+        background: #10151b;
+        border-color: #344052;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>The Hitchhiker's Guide to Boilers</h1>
+    </header>
+    <section id="messages" class="messages" aria-live="polite"></section>
+    <form id="chat-form">
+      <textarea id="question" placeholder="Ask about any stored manual, document, or regulation..."></textarea>
+      <button id="send" type="submit">Send</button>
+    </form>
+  </main>
+  <script>
+    const state = {
+      history: JSON.parse(sessionStorage.getItem("boilerGuideHistory") || "[]")
+    };
+    const messages = document.getElementById("messages");
+    const form = document.getElementById("chat-form");
+    const question = document.getElementById("question");
+    const send = document.getElementById("send");
+
+    function saveHistory() {
+      sessionStorage.setItem("boilerGuideHistory", JSON.stringify(state.history.slice(-40)));
+    }
+
+    function evidenceUrl(item) {
+      if (item.asset_url) return item.asset_url;
+      if (item.manual_id && item.asset_id) return "/manuals/" + encodeURIComponent(item.manual_id) + "/assets/" + encodeURIComponent(item.asset_id);
+      if (item.manual_id && item.page) return "/manuals/" + encodeURIComponent(item.manual_id) + "/pages/" + encodeURIComponent(item.page) + "/image";
+      return "";
+    }
+
+    function appendMessage(role, payload) {
+      const node = document.createElement("article");
+      node.className = "message " + role;
+      const text = document.createElement("div");
+      text.textContent = typeof payload === "string" ? payload : payload.answer || "";
+      node.appendChild(text);
+
+      if (payload && typeof payload === "object") {
+        const meta = document.createElement("div");
+        meta.className = "meta";
+        meta.textContent = "Confidence: " + (payload.confidence || "-");
+        node.appendChild(meta);
+
+        const citations = Array.isArray(payload.citations) ? payload.citations : [];
+        if (citations.length) {
+          const citationRow = document.createElement("div");
+          citationRow.className = "citations";
+          for (const citation of citations.slice(0, 6)) {
+            const href = evidenceUrl(citation);
+            if (!href) continue;
+            const link = document.createElement("a");
+            link.href = href;
+            link.target = "_blank";
+            link.rel = "noopener";
+            link.textContent = "Page " + citation.page;
+            citationRow.appendChild(link);
+          }
+          if (citationRow.childNodes.length) node.appendChild(citationRow);
+        }
+
+        const visualAssets = Array.isArray(payload.visual_assets) && payload.visual_assets.length
+          ? payload.visual_assets
+          : (Array.isArray(payload.evidence) ? payload.evidence : []);
+        const grid = document.createElement("div");
+        grid.className = "evidence";
+        for (const item of visualAssets.slice(0, 4)) {
+          const href = evidenceUrl(item);
+          if (!href) continue;
+          const card = document.createElement("a");
+          card.className = "evidence-card";
+          card.href = href;
+          card.target = "_blank";
+          card.rel = "noopener";
+          const img = document.createElement("img");
+          img.src = href;
+          img.alt = "Evidence from page " + (item.page || "-");
+          card.appendChild(img);
+          const label = document.createElement("span");
+          label.textContent = [item.type || "evidence", item.page ? "page " + item.page : ""].filter(Boolean).join(" | ");
+          card.appendChild(label);
+          grid.appendChild(card);
+        }
+        if (grid.childNodes.length) node.appendChild(grid);
+      }
+
+      messages.appendChild(node);
+      messages.scrollTop = messages.scrollHeight;
+    }
+
+    function renderHistory() {
+      messages.textContent = "";
+      for (const turn of state.history) appendMessage(turn.role, turn.payload);
+    }
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const text = question.value.trim();
+      if (!text) return;
+      question.value = "";
+      send.disabled = true;
+      const userTurn = { role: "user", payload: text };
+      state.history.push(userTurn);
+      appendMessage(userTurn.role, userTurn.payload);
+      saveHistory();
+      try {
+        const response = await fetch("/manuals/query", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ question: text, limit: 6 })
+        });
+        const data = await response.json().catch(() => ({}));
+        const payload = response.ok ? data : { answer: data.error || data.detail || "Manual search failed.", confidence: "low" };
+        state.history.push({ role: "assistant", payload });
+        appendMessage("assistant", payload);
+        saveHistory();
+      } catch (error) {
+        const payload = { answer: "Manual search is unreachable.", confidence: "low" };
+        state.history.push({ role: "assistant", payload });
+        appendMessage("assistant", payload);
+        saveHistory();
+      } finally {
+        send.disabled = false;
+        question.focus();
+      }
+    });
+
+    renderHistory();
+    if (!state.history.length) {
+      appendMessage("assistant", { answer: "Ask a question and I will search all stored manuals and documents for cited evidence.", confidence: "-" });
+    }
+  </script>
+</body>
+</html>`;
+
+const DEV_PAGE = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pet Llama</title>
   <style>
     :root {
       color-scheme: light dark;
@@ -193,15 +581,15 @@ const CHAT_PAGE = `<!doctype html>
       overflow-wrap: anywhere;
     }
 
-    .guide-shell {
+    .manual-chat {
       display: grid;
       gap: 12px;
-      min-height: 320px;
-      align-content: start;
-      white-space: normal;
+      max-height: 520px;
+      overflow: auto;
+      padding: 4px 0;
     }
 
-    .chat-turn {
+    .manual-message {
       display: grid;
       gap: 8px;
       padding: 12px;
@@ -210,62 +598,51 @@ const CHAT_PAGE = `<!doctype html>
       background: #ffffff;
     }
 
-    .chat-turn.user {
-      background: #eef6f3;
+    .manual-message.user {
+      border-color: #9fb7ce;
+      background: #f7fbff;
     }
 
-    .turn-meta {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 10px;
+    .manual-meta,
+    .manual-citations {
       color: #627083;
-      font-size: 12px;
-      font-weight: 700;
+      font-size: 13px;
     }
 
-    .citation-row,
-    .evidence-grid {
+    .manual-citations {
       display: flex;
       flex-wrap: wrap;
       gap: 8px;
     }
 
-    .citation {
-      display: inline-flex;
-      align-items: center;
-      min-height: 32px;
-      padding: 0 10px;
-      border-radius: 8px;
-      background: #e8edf2;
-      color: #17202a;
-      text-decoration: none;
+    .manual-citations a {
+      color: #146c5c;
       font-weight: 700;
     }
 
-    .evidence-thumb {
-      width: 148px;
+    .manual-evidence-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 10px;
+    }
+
+    .manual-evidence {
+      display: grid;
+      gap: 6px;
+      padding: 8px;
       border: 1px solid #d8dde6;
       border-radius: 8px;
-      overflow: hidden;
-      background: #ffffff;
-      color: inherit;
-      text-decoration: none;
+      background: #f8fafc;
+      font-size: 13px;
     }
 
-    .evidence-thumb img {
-      display: block;
+    .manual-evidence img {
       width: 100%;
-      aspect-ratio: 4 / 5;
-      object-fit: cover;
-      background: #f0f3f6;
-    }
-
-    .evidence-thumb span {
-      display: block;
-      padding: 6px 8px;
-      font-size: 12px;
-      font-weight: 700;
+      aspect-ratio: 4 / 3;
+      object-fit: contain;
+      border: 1px solid #d8dde6;
+      border-radius: 6px;
+      background: #ffffff;
     }
 
     .actions {
@@ -371,10 +748,17 @@ const CHAT_PAGE = `<!doctype html>
       details,
       .panel,
       .control-bar,
+      .manual-message,
       select,
       input[type="file"],
       textarea {
         background: #171d25;
+        border-color: #344052;
+      }
+
+      .manual-message.user,
+      .manual-evidence {
+        background: #10151b;
         border-color: #344052;
       }
 
@@ -385,18 +769,6 @@ const CHAT_PAGE = `<!doctype html>
 
       pre {
         background: #10151b;
-      }
-
-      .chat-turn,
-      .evidence-thumb {
-        background: #171d25;
-        border-color: #344052;
-      }
-
-      .chat-turn.user,
-      .citation {
-        background: #263241;
-        color: #edf2f7;
       }
     }
 
@@ -430,8 +802,8 @@ const CHAT_PAGE = `<!doctype html>
   <main>
     <header>
       <div>
-        <h1>Hitchhiker's Guide to Boilers</h1>
-        <div class="version">Manual evidence, direct citations, and page images</div>
+        <h1>Pet Llama v0.2</h1>
+        <div class="version">AI Gateway Engineering Console</div>
       </div>
       <button id="refresh-health" class="secondary" type="button">Refresh health</button>
     </header>
@@ -455,7 +827,7 @@ const CHAT_PAGE = `<!doctype html>
               <option value="extract-evidence">Extract Evidence</option>
               <option value="json">JSON</option>
               <option value="self-test">Self Test</option>
-              <option value="manual-ripper" selected>Guide</option>
+              <option value="manual-ripper">Manual Ripper</option>
             </select>
           </label>
           <label>
@@ -479,7 +851,7 @@ const CHAT_PAGE = `<!doctype html>
 
         <label class="panel">
           Prompt
-          <textarea id="prompt" placeholder="Ask about dimensions, clearances, fault codes, flues, gas rates, pressure, or wiring..."></textarea>
+          <textarea id="prompt" placeholder="Enter prompt, source text, or diagnostic input..."></textarea>
         </label>
 
         <label id="schema-panel" class="panel" hidden>
@@ -487,8 +859,8 @@ const CHAT_PAGE = `<!doctype html>
           <textarea id="schema" class="schema-box" placeholder='{"answer":"string","confidence":"low|medium|high"}'></textarea>
         </label>
 
-        <section id="manual-panel" class="panel">
-          <strong>Manual library</strong>
+        <section id="manual-panel" class="panel" hidden>
+          <strong>Manual Ripper</strong>
           <div class="manual-grid">
             <label>
               PDF upload
@@ -502,12 +874,16 @@ const CHAT_PAGE = `<!doctype html>
               <option value="">No manuals loaded</option>
             </select>
           </label>
+          <label>
+            Attach photographed page
+            <input id="manual-image" class="manual-file" type="file" accept="image/*">
+          </label>
           <button id="manual-refresh" class="secondary" type="button">Refresh manuals</button>
         </section>
 
         <section class="panel">
-          <strong>Guide</strong>
-          <div id="response" class="response guide-shell">Select or upload a manual, then ask a question.</div>
+          <strong>Response</strong>
+          <div id="response" class="response manual-chat">Ready.</div>
         </section>
       </div>
 
@@ -549,7 +925,7 @@ const CHAT_PAGE = `<!doctype html>
       gatewayOrigin: "-",
       defaultModel: "",
       lastHealth: null,
-      manualChat: []
+      manualHistory: []
     };
 
     const els = {
@@ -562,6 +938,7 @@ const CHAT_PAGE = `<!doctype html>
       schema: document.getElementById("schema"),
       manualPanel: document.getElementById("manual-panel"),
       manualFile: document.getElementById("manual-file"),
+      manualImage: document.getElementById("manual-image"),
       manualUpload: document.getElementById("manual-upload"),
       manualList: document.getElementById("manual-list"),
       manualRefresh: document.getElementById("manual-refresh"),
@@ -641,72 +1018,77 @@ const CHAT_PAGE = `<!doctype html>
       return pretty(data);
     }
 
-    function appendManualTurn(turn) {
-      state.manualChat.push(turn);
-      renderManualChat();
+    function manualEvidenceUrl(manualId, item) {
+      if (item.asset_url) return item.asset_url;
+      if (item.type === "page_render" && item.page) return "/manuals/" + encodeURIComponent(manualId) + "/pages/" + encodeURIComponent(item.page) + "/image";
+      if (item.asset_id) return "/manuals/" + encodeURIComponent(manualId) + "/assets/" + encodeURIComponent(item.asset_id);
+      if (item.page) return "/manuals/" + encodeURIComponent(manualId) + "/pages/" + encodeURIComponent(item.page) + "/image";
+      return "";
     }
 
-    function renderManualChat() {
-      els.response.classList.remove("error-text");
-      els.response.textContent = "";
-      els.response.classList.add("guide-shell");
-      if (!state.manualChat.length) {
-        els.response.textContent = "Select or upload a manual, then ask a question.";
-        return;
-      }
-      for (const turn of state.manualChat) {
-        const node = document.createElement("article");
-        node.className = "chat-turn " + turn.role;
+    function appendManualMessage(role, payload) {
+      if (els.response.textContent === "Ready.") els.response.textContent = "";
+      const message = document.createElement("article");
+      message.className = "manual-message " + role;
+      const body = document.createElement("div");
+      body.textContent = typeof payload === "string" ? payload : payload.answer || "";
+      message.appendChild(body);
+
+      if (payload && typeof payload === "object") {
         const meta = document.createElement("div");
-        meta.className = "turn-meta";
-        meta.append(document.createTextNode(turn.role === "user" ? "You" : "Guide"));
-        if (turn.confidence) {
-          const confidence = document.createElement("span");
-          confidence.textContent = "Confidence: " + turn.confidence;
-          meta.append(confidence);
-        }
-        const body = document.createElement("div");
-        body.textContent = turn.text || "";
-        node.append(meta, body);
+        meta.className = "manual-meta";
+        meta.textContent = "Confidence: " + safeText(payload.confidence);
+        message.appendChild(meta);
 
-        if (Array.isArray(turn.citations) && turn.citations.length) {
-          const citations = document.createElement("div");
-          citations.className = "citation-row";
-          for (const citation of turn.citations) {
-            const link = document.createElement("a");
-            link.className = "citation";
-            link.href = citation.url || citation.asset_url || "#";
-            link.target = "_blank";
-            link.rel = "noopener";
-            link.textContent = citation.label || ("Page " + citation.page);
-            citations.appendChild(link);
-          }
-          node.appendChild(citations);
+        const evidence = Array.isArray(payload.evidence) ? payload.evidence.slice(0, 4) : [];
+        const citations = document.createElement("div");
+        citations.className = "manual-citations";
+        for (const item of evidence) {
+          const href = manualEvidenceUrl(payload.manual_id, item);
+          if (!href) continue;
+          const link = document.createElement("a");
+          link.href = href;
+          link.target = "_blank";
+          link.rel = "noopener";
+          link.textContent = "Page " + item.page + " " + (item.type || "evidence");
+          citations.appendChild(link);
         }
+        if (citations.childNodes.length) message.appendChild(citations);
 
-        if (Array.isArray(turn.evidence) && turn.evidence.length) {
-          const grid = document.createElement("div");
-          grid.className = "evidence-grid";
-          for (const item of turn.evidence) {
-            const url = item.asset_url || item.url;
-            if (!url) continue;
-            const link = document.createElement("a");
-            link.className = "evidence-thumb";
-            link.href = url;
-            link.target = "_blank";
-            link.rel = "noopener";
+        const grid = document.createElement("div");
+        grid.className = "manual-evidence-grid";
+        for (const item of evidence) {
+          const href = manualEvidenceUrl(payload.manual_id, item);
+          const card = document.createElement("a");
+          card.className = "manual-evidence";
+          card.href = href || "#";
+          card.target = "_blank";
+          card.rel = "noopener";
+          if (href && (item.type === "page_render" || item.type === "image")) {
             const img = document.createElement("img");
-            img.alt = "Page " + item.page + " evidence";
-            img.src = item.thumbnail_url || url;
-            const label = document.createElement("span");
-            label.textContent = "Page " + item.page + " - " + (item.type || "evidence");
-            link.append(img, label);
-            grid.appendChild(link);
+            img.src = href;
+            img.alt = "Evidence from page " + item.page;
+            card.appendChild(img);
           }
-          if (grid.childElementCount) node.appendChild(grid);
+          const caption = document.createElement("span");
+          caption.textContent = [
+            item.type || "evidence",
+            item.page ? "page " + item.page : "",
+            item.confidence ? item.confidence : ""
+          ].filter(Boolean).join(" | ");
+          card.appendChild(caption);
+          const snippet = item.snippet || item.description || "";
+          if (snippet) {
+            const text = document.createElement("small");
+            text.textContent = snippet.length > 180 ? snippet.slice(0, 180) + "..." : snippet;
+            card.appendChild(text);
+          }
+          grid.appendChild(card);
         }
-        els.response.appendChild(node);
+        if (grid.childNodes.length) message.appendChild(grid);
       }
+
+      els.response.appendChild(message);
       els.response.scrollTop = els.response.scrollHeight;
     }
 
@@ -884,44 +1266,47 @@ const CHAT_PAGE = `<!doctype html>
     async function sendManualQuestion() {
       const manualId = els.manualList.value;
       const question = els.prompt.value.trim();
+      const image = els.manualImage.files && els.manualImage.files[0];
       if (!manualId) {
         els.response.classList.add("error-text");
         els.response.textContent = "Select or upload a manual first.";
         return;
       }
-      if (!question) {
+      if (!question && !image) {
         els.response.classList.add("error-text");
-        els.response.textContent = "Question is required for Manual Ripper.";
+        els.response.textContent = "Question or photographed page is required for Manual Ripper.";
         return;
       }
       const request = { question, limit: 5 };
       els.send.disabled = true;
       els.response.classList.remove("error-text");
-      appendManualTurn({ role: "user", text: question });
+      appendManualMessage("user", question || "Attached photographed manual page.");
       els.prompt.value = "";
-      appendManualTurn({ role: "assistant", text: "Checking the manual evidence..." });
-      els.rawRequest.textContent = pretty({ manual_id: manualId, ...request });
+      els.rawRequest.textContent = pretty({ manual_id: manualId, ...request, image: image ? image.name : undefined });
       try {
-        const result = await fetch("/manuals/" + encodeURIComponent(manualId) + "/query", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(request)
-        });
+        let result;
+        if (image) {
+          const formData = new FormData();
+          formData.append("question", question);
+          formData.append("image", image);
+          result = await fetch("/manuals/" + encodeURIComponent(manualId) + "/query-image", {
+            method: "POST",
+            body: formData
+          });
+          els.manualImage.value = "";
+        } else {
+          result = await fetch("/manuals/" + encodeURIComponent(manualId) + "/query", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(request)
+          });
+        }
         const data = await result.json().catch(() => ({}));
         els.rawResponse.textContent = pretty(data);
         if (!result.ok) throw new Error(data.error || data.detail || "Manual query failed");
-        const evidence = Array.isArray(data.evidence) ? data.evidence : [];
-        state.manualChat.pop();
-        appendManualTurn({
-          role: "assistant",
-          text: data.answer || "No answer returned.",
-          confidence: data.confidence,
-          citations: (Array.isArray(data.citations) ? data.citations : []).map((citation) => ({
-            ...citation,
-            url: citation.url || "/manuals/" + encodeURIComponent(manualId) + "/pages/" + encodeURIComponent(citation.page) + "/image"
-          })),
-          evidence
-        });
+        appendManualMessage("assistant", data);
+        state.manualHistory.push({ role: "user", content: question });
+        state.manualHistory.push({ role: "assistant", content: data.answer || "", evidence: data.evidence || [] });
         updateDiagnostics({
           diagnostics: {
             gatewayUrl: "Manual Ripper",
@@ -931,9 +1316,8 @@ const CHAT_PAGE = `<!doctype html>
           }
         });
       } catch (error) {
-        state.manualChat.pop();
         els.response.classList.add("error-text");
-        appendManualTurn({ role: "assistant", text: error.message || "Manual Ripper service is unreachable.", confidence: "low" });
+        appendManualMessage("assistant", error.message || "Manual Ripper service is unreachable.");
       } finally {
         els.send.disabled = false;
       }
@@ -959,17 +1343,333 @@ const CHAT_PAGE = `<!doctype html>
     els.manualRefresh.addEventListener("click", loadManuals);
     els.clear.addEventListener("click", () => {
       els.prompt.value = "";
-      state.manualChat = [];
-      renderManualChat();
+      state.manualHistory = [];
+      els.response.textContent = "Ready.";
       els.trace.textContent = "";
       els.rawRequest.textContent = "{}";
       els.rawResponse.textContent = "{}";
     });
     els.refreshHealth.addEventListener("click", refreshHealth);
 
-    renderManualChat();
     loadModels().then(refreshHealth).then(loadManuals);
     setInterval(refreshHealth, 30000);
+  </script>
+</body>
+</html>`;
+
+const ADMIN_PAGE = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Manual Ripper Admin</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.5;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100dvh;
+      background: #f3f5f7;
+      color: #17202a;
+    }
+
+    main {
+      width: min(1120px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 20px 0 40px;
+      display: grid;
+      gap: 16px;
+    }
+
+    header,
+    section,
+    .doc {
+      border: 1px solid #d8dde6;
+      border-radius: 8px;
+      background: #ffffff;
+    }
+
+    header,
+    section {
+      padding: 16px;
+    }
+
+    h1,
+    h2 {
+      margin: 0;
+      letter-spacing: 0;
+    }
+
+    .upload {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: end;
+    }
+
+    label {
+      display: grid;
+      gap: 6px;
+      font-weight: 700;
+    }
+
+    input,
+    button {
+      min-height: 42px;
+      box-sizing: border-box;
+      border-radius: 8px;
+      font: inherit;
+    }
+
+    input {
+      padding: 8px 10px;
+      border: 1px solid #c8ced8;
+      background: #ffffff;
+      color: inherit;
+    }
+
+    button {
+      border: 0;
+      padding: 0 16px;
+      background: #146c5c;
+      color: #ffffff;
+      font-weight: 800;
+      cursor: pointer;
+    }
+
+    button.secondary {
+      background: #e8edf2;
+      color: #17202a;
+    }
+
+    button.danger {
+      background: #b42318;
+    }
+
+    button:disabled {
+      cursor: wait;
+      opacity: 0.65;
+    }
+
+    .docs {
+      display: grid;
+      gap: 10px;
+    }
+
+    .doc {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+      padding: 12px;
+      align-items: center;
+    }
+
+    .doc-title {
+      font-weight: 800;
+      overflow-wrap: anywhere;
+    }
+
+    .doc-meta {
+      color: #627083;
+      font-size: 13px;
+    }
+
+    .doc-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: end;
+    }
+
+    #status {
+      color: #627083;
+      min-height: 24px;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      body {
+        background: #10151b;
+        color: #edf2f7;
+      }
+
+      header,
+      section,
+      .doc,
+      input {
+        background: #171d25;
+        border-color: #344052;
+      }
+
+      button.secondary {
+        background: #263241;
+        color: #edf2f7;
+      }
+    }
+
+    @media (max-width: 760px) {
+      .upload,
+      .doc {
+        grid-template-columns: 1fr;
+      }
+
+      .doc-actions {
+        justify-content: start;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Document Manager</h1>
+      <div id="status">Loading documents...</div>
+    </header>
+
+    <section>
+      <h2>Upload PDF</h2>
+      <form id="upload-form" class="upload">
+        <label>
+          PDF document
+          <input id="pdf" type="file" accept="application/pdf,.pdf">
+        </label>
+        <button id="upload" type="submit">Upload</button>
+      </form>
+    </section>
+
+    <section>
+      <h2>Stored Documents</h2>
+      <div id="docs" class="docs"></div>
+    </section>
+  </main>
+  <script>
+    const statusEl = document.getElementById("status");
+    const docsEl = document.getElementById("docs");
+    const uploadForm = document.getElementById("upload-form");
+    const pdf = document.getElementById("pdf");
+    const upload = document.getElementById("upload");
+    const adminKey = new URL(location.href).searchParams.get("admin_key") || "";
+
+    function adminUrl(path) {
+      return adminKey ? path + "?admin_key=" + encodeURIComponent(adminKey) : path;
+    }
+
+    function setStatus(text) {
+      statusEl.textContent = text;
+    }
+
+    function docName(doc) {
+      return [doc.manufacturer, doc.model].filter(Boolean).join(" ") || doc.filename || doc.id;
+    }
+
+    async function loadDocs() {
+      setStatus("Loading documents...");
+      try {
+        const response = await fetch("/manuals", { cache: "no-store" });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || data.detail || "Unable to load documents");
+        const manuals = Array.isArray(data.manuals) ? data.manuals : [];
+        docsEl.textContent = "";
+        if (!manuals.length) {
+          docsEl.textContent = "No documents stored yet.";
+        }
+        for (const doc of manuals) {
+          const row = document.createElement("article");
+          row.className = "doc";
+          const body = document.createElement("div");
+          const title = document.createElement("div");
+          title.className = "doc-title";
+          title.textContent = docName(doc);
+          const meta = document.createElement("div");
+          meta.className = "doc-meta";
+          meta.textContent = [
+            "status: " + (doc.extraction_status || "-"),
+            doc.page_count ? "pages: " + doc.page_count : "",
+            doc.uploaded_at ? "uploaded: " + doc.uploaded_at : ""
+          ].filter(Boolean).join(" | ");
+          body.appendChild(title);
+          body.appendChild(meta);
+          row.appendChild(body);
+
+          const actions = document.createElement("div");
+          actions.className = "doc-actions";
+          const extract = document.createElement("button");
+          extract.type = "button";
+          extract.textContent = "Re-extract";
+          extract.addEventListener("click", () => extractDoc(doc.id));
+          const disable = document.createElement("button");
+          disable.type = "button";
+          disable.className = "secondary";
+          disable.textContent = "Disable";
+          disable.addEventListener("click", () => manageDoc(doc.id, "disable"));
+          const del = document.createElement("button");
+          del.type = "button";
+          del.className = "danger";
+          del.textContent = "Delete";
+          del.addEventListener("click", () => manageDoc(doc.id, "delete"));
+          actions.appendChild(extract);
+          actions.appendChild(disable);
+          actions.appendChild(del);
+          row.appendChild(actions);
+          docsEl.appendChild(row);
+        }
+        setStatus("Loaded " + manuals.length + " document" + (manuals.length === 1 ? "" : "s") + ".");
+      } catch (error) {
+        docsEl.textContent = "";
+        setStatus(error.message || "Manual Ripper service is unreachable.");
+      }
+    }
+
+    async function extractDoc(id) {
+      setStatus("Extracting document...");
+      const response = await fetch("/manuals/" + encodeURIComponent(id) + "/extract", { method: "POST" });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) setStatus(data.error || data.detail || "Extraction failed.");
+      await loadDocs();
+    }
+
+    async function manageDoc(id, action) {
+      setStatus(action === "delete" ? "Deleting document..." : "Disabling document...");
+      const response = await fetch(adminUrl("/admin/manuals/" + encodeURIComponent(id)), {
+        method: action === "delete" ? "DELETE" : "PATCH",
+        headers: action === "delete" ? undefined : { "content-type": "application/json" },
+        body: action === "delete" ? undefined : JSON.stringify({ disabled: true })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) setStatus(data.error || data.detail || "Document action failed.");
+      await loadDocs();
+    }
+
+    uploadForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const file = pdf.files && pdf.files[0];
+      if (!file) {
+        setStatus("Choose a PDF first.");
+        return;
+      }
+      const formData = new FormData();
+      formData.append("file", file);
+      upload.disabled = true;
+      setStatus("Uploading PDF...");
+      try {
+        const response = await fetch("/manuals/upload", { method: "POST", body: formData });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || data.detail || "Upload failed.");
+        setStatus("Uploaded. Extracting...");
+        await fetch("/manuals/" + encodeURIComponent(data.manual.id) + "/extract", { method: "POST" });
+        pdf.value = "";
+        await loadDocs();
+      } catch (error) {
+        setStatus(error.message || "Upload failed.");
+      } finally {
+        upload.disabled = false;
+      }
+    });
+
+    loadDocs();
   </script>
 </body>
 </html>`;
@@ -979,20 +1679,39 @@ const JSON_HEADERS = {
   "cache-control": "no-store",
 };
 
-addEventListener("fetch", (event) => {
-  event.respondWith(handleRequest(event.request, globalThis));
-});
+if (typeof addEventListener === "function") {
+  addEventListener("fetch", (event) => {
+    event.respondWith(handleRequest(event.request, globalThis));
+  });
+}
 
 async function handleRequest(request, env) {
   const url = new URL(request.url);
 
   if (request.method === "GET" && url.pathname === "/") {
-    return new Response(CHAT_PAGE, {
-      headers: {
-        "content-type": "text/html; charset=utf-8",
-        "cache-control": "no-store",
-      },
-    });
+    return html(WELCOME_PAGE);
+  }
+
+  if (request.method === "GET" && url.pathname === "/chat") {
+    return html(PUBLIC_CHAT_PAGE);
+  }
+
+  if (request.method === "GET" && url.pathname === "/dev") {
+    const blocked = requireAdmin(request, env);
+    if (blocked) return blocked;
+    return html(DEV_PAGE);
+  }
+
+  if (request.method === "GET" && url.pathname === "/admin") {
+    const blocked = requireAdmin(request, env);
+    if (blocked) return blocked;
+    return html(ADMIN_PAGE);
+  }
+
+  if (url.pathname.startsWith("/admin/manuals/")) {
+    const blocked = requireAdmin(request, env);
+    if (blocked) return blocked;
+    return handleManualProxy(request, env, url, { stripAdminPrefix: true });
   }
 
   if (request.method === "GET" && url.pathname === "/health") {
@@ -1018,7 +1737,24 @@ async function handleRequest(request, env) {
   return json({ error: "Not found" }, 404);
 }
 
-async function handleManualProxy(request, env, url) {
+function html(page) {
+  return new Response(page, {
+      headers: {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "no-store",
+      },
+  });
+}
+
+function requireAdmin(request, env) {
+  if (!env.ADMIN_KEY) return null;
+  const url = new URL(request.url);
+  const supplied = request.headers.get("x-admin-key") || url.searchParams.get("admin_key");
+  if (supplied === env.ADMIN_KEY) return null;
+  return json({ error: "Admin access denied" }, 401);
+}
+
+async function handleManualProxy(request, env, url, options = {}) {
   if (!env.MANUAL_RIPPER_BASE_URL) {
     return json({
       error: "Manual Ripper service is not configured",
@@ -1027,7 +1763,8 @@ async function handleManualProxy(request, env, url) {
   }
 
   const started = Date.now();
-  const target = buildGatewayUrl(env.MANUAL_RIPPER_BASE_URL, url.pathname + url.search);
+  const pathname = options.stripAdminPrefix ? url.pathname.replace(/^\/admin/, "/admin") : url.pathname;
+  const target = buildGatewayUrl(env.MANUAL_RIPPER_BASE_URL, pathname + url.search);
   const headers = {};
   const contentType = request.headers.get("content-type");
   if (contentType) headers["content-type"] = contentType;
@@ -1040,14 +1777,13 @@ async function handleManualProxy(request, env, url) {
     });
     const upstreamType = upstream.headers.get("content-type") || "";
     if (!upstreamType.includes("application/json")) {
-      const responseHeaders = new Headers(upstream.headers);
-      for (const [key, value] of Object.entries(corsHeaders())) {
-        responseHeaders.set(key, value);
-      }
-      responseHeaders.set("cache-control", upstream.ok ? "public, max-age=3600" : "no-store");
       return new Response(upstream.body, {
         status: upstream.status,
-        headers: responseHeaders,
+        headers: {
+          "content-type": upstreamType || "application/octet-stream",
+          "cache-control": upstream.headers.get("cache-control") || "no-store",
+          ...corsHeaders(),
+        },
       });
     }
     const text = await upstream.text();
@@ -1456,7 +2192,11 @@ function json(payload, status = 200) {
 function corsHeaders() {
   return {
     "access-control-allow-origin": "*",
-    "access-control-allow-methods": "GET,POST,OPTIONS",
-    "access-control-allow-headers": "content-type",
+    "access-control-allow-methods": "GET,POST,PATCH,DELETE,OPTIONS",
+    "access-control-allow-headers": "content-type,x-admin-key",
   };
+}
+
+if (typeof module !== "undefined") {
+  module.exports = { handleRequest };
 }

@@ -215,13 +215,14 @@ test('summarise route allows a caller-provided system prompt', async () => {
 test('manual guide UI clears chat input after send', () => {
   const worker = fs.readFileSync(path.join(__dirname, '..', 'src', 'worker.js'), 'utf8');
 
-  assert.match(worker, /appendManualTurn\(\{ role: "user", text: question \}\);[\s\S]*els\.prompt\.value = "";/);
+  assert.match(worker, /const text = question\.value\.trim\(\);[\s\S]*question\.value = "";/);
+  assert.match(worker, /fetch\("\/manuals\/query"/);
 });
 
 test('manual guide UI preserves follow-up chat history', () => {
   const worker = fs.readFileSync(path.join(__dirname, '..', 'src', 'worker.js'), 'utf8');
 
-  assert.match(worker, /manualChat: \[\]/);
-  assert.match(worker, /state\.manualChat\.push\(turn\)/);
-  assert.match(worker, /for \(const turn of state\.manualChat\)/);
+  assert.match(worker, /history: JSON\.parse\(sessionStorage\.getItem\("boilerGuideHistory"\)/);
+  assert.match(worker, /state\.history\.push\(userTurn\)/);
+  assert.match(worker, /for \(const turn of state\.history\)/);
 });

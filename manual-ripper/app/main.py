@@ -11,7 +11,7 @@ from typing import Any
 
 import fitz
 import requests
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
@@ -64,6 +64,10 @@ class SearchRequest(BaseModel):
     query: str
     manual_id: str | None = None
     limit: int = 10
+
+
+class AdminManualUpdate(BaseModel):
+    disabled: bool = False
 
 
 app = FastAPI(title="Daedalus Manual Ripper", version=APP_VERSION)
@@ -509,6 +513,8 @@ def search_pages(query: str, manual_id: str | None = None, limit: int = 10) -> l
     results: list[dict[str, Any]] = []
     for row in rows:
         manual = row_to_manual(row)
+        if manual.get("notes") == "disabled":
+            continue
         if manual["extraction_status"] != "complete":
             try:
                 manual = extract_pdf(manual["id"])
@@ -1153,7 +1159,128 @@ def query_manual(manual_id: str, request: QueryRequest) -> dict[str, Any]:
     }
 
 
+@app.post("/manuals/query")
+def query_all_manuals(request: QueryRequest) -> dict[str, Any]:
+    evidence = search_pages(request.question, manual_id=None, limit=request.limit)
+    if not evidence:
+        return {
+            "answer": "No relevant manual evidence was found.",
+            "manual_id": None,
+            "citations": [],
+            "confidence": "low",
+            "evidence": [],
+            "visual_assets": [],
+        }
+
+    checked_manuals: set[str] = set()
+    for item in evidence:
+        manual_id = item.get("manual_id")
+        if not manual_id or manual_id in checked_manuals:
+            continue
+        checked_manuals.add(manual_id)
+        deterministic = deterministic_answer(manual_id, request.question)
+        if deterministic:
+            return {"manual_id": manual_id, **deterministic}
+
+    answer = ask_gateway(request.question, evidence)
+    citations = [
+        {"manual_id": item["manual_id"], "page": item["page"], "label": f"Page {item['page']}"}
+        for item in evidence
+    ]
+    return {
+        "answer": answer,
+        "manual_id": None,
+        "citations": citations,
+        "confidence": evidence[0]["confidence"] if evidence else "low",
+        "evidence": evidence,
+        "visual_assets": [
+            {"manual_id": item["manual_id"], "page": item["page"], "url": item.get("asset_url"), "thumbnail_url": item.get("thumbnail_url")}
+            for item in evidence
+            if item.get("asset_url")
+        ],
+    }
+
+
 @app.post("/manuals/search")
 def search_manuals(request: SearchRequest) -> dict[str, Any]:
     evidence = search_pages(request.query, manual_id=request.manual_id, limit=request.limit)
     return {"results": evidence}
+
+
+@app.patch("/admin/manuals/{manual_id}")
+def admin_update_manual(manual_id: str, request: AdminManualUpdate) -> dict[str, Any]:
+    get_manual_or_404(manual_id)
+    note = "disabled" if request.disabled else None
+    with db() as conn:
+        conn.execute("UPDATE manuals SET notes = ? WHERE id = ?", (note, manual_id))
+    return {"manual": get_manual_or_404(manual_id)}
+
+
+@app.delete("/admin/manuals/{manual_id}")
+def admin_delete_manual(manual_id: str) -> dict[str, Any]:
+    get_manual_or_404(manual_id)
+    original_path(manual_id).unlink(missing_ok=True)
+    extracted_path(manual_id).unlink(missing_ok=True)
+    evidence_index_path(manual_id).unlink(missing_ok=True)
+    assets = manual_assets_dir(manual_id)
+    if assets.exists():
+        for path in assets.rglob("*"):
+            if path.is_file():
+                path.unlink(missing_ok=True)
+        for path in sorted([item for item in assets.rglob("*") if item.is_dir()], reverse=True):
+            path.rmdir()
+        assets.rmdir()
+    with db() as conn:
+        conn.execute("DELETE FROM manuals WHERE id = ?", (manual_id,))
+    return {"ok": True, "manual_id": manual_id}
+
+
+@app.post("/manuals/{manual_id}/query-image")
+async def query_manual_with_image(
+    manual_id: str,
+    question: str = Form(""),
+    image: UploadFile = File(...),
+) -> dict[str, Any]:
+    get_manual_or_404(manual_id)
+    content_type = image.content_type or ""
+    if not content_type.startswith("image/"):
+        raise HTTPException(status_code=415, detail="only image uploads are accepted")
+
+    ext = Path(image.filename or "upload.png").suffix.lower()
+    if ext not in {".png", ".jpg", ".jpeg", ".webp"}:
+        ext = ".png"
+    asset_id = f"chat_{uuid.uuid4().hex}{ext}"
+    target = manual_assets_dir(manual_id) / asset_id
+    target.parent.mkdir(parents=True, exist_ok=True)
+    total = 0
+    with target.open("wb") as handle:
+        while True:
+            chunk = await image.read(1024 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > 10 * 1024 * 1024:
+                target.unlink(missing_ok=True)
+                raise HTTPException(status_code=413, detail="image exceeds upload size limit")
+            handle.write(chunk)
+
+    evidence = {
+        "manual_id": manual_id,
+        "page": 0,
+        "snippet": "User-uploaded photographed manual page or diagram",
+        "description": "User-uploaded photographed manual page or diagram",
+        "type": "image",
+        "confidence": "low",
+        "asset_url": public_asset_path(manual_id, asset_id),
+        "thumbnail_url": public_asset_path(manual_id, asset_id),
+        "generated": False,
+    }
+    return {
+        "answer": "Visual parsing is not available yet. I preserved the uploaded image as chat evidence rather than guessing.",
+        "manual_id": manual_id,
+        "question": question,
+        "citations": [],
+        "confidence": "low",
+        "evidence": [evidence],
+        "visual_assets": [{"page": 0, "url": evidence["asset_url"], "thumbnail_url": evidence["thumbnail_url"]}],
+    }
