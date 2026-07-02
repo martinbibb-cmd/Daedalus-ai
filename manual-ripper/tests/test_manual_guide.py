@@ -16,8 +16,10 @@ def configure_storage(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "STORAGE_ROOT", root)
     monkeypatch.setattr(main, "ORIGINALS_DIR", root / "originals")
     monkeypatch.setattr(main, "EXTRACTED_DIR", root / "extracted")
+    monkeypatch.setattr(main, "FACTS_DIR", root / "facts")
     monkeypatch.setattr(main, "INDEXES_DIR", root / "indexes")
     monkeypatch.setattr(main, "ASSETS_DIR", root / "assets")
+    monkeypatch.setattr(main, "REGRESSIONS_DIR", root / "regressions")
     monkeypatch.setattr(main, "DB_PATH", root / "metadata.sqlite")
     main.ensure_storage()
     return root
@@ -567,6 +569,9 @@ def test_terminal_clearance_opening_answers_from_matching_table_row(tmp_path, mo
         "value_mm": 300,
         "page": 20,
     }.items() <= index["facts"][0].items()
+    stored_facts = json.loads(main.facts_path(manual_id).read_text(encoding="utf-8"))
+    assert stored_facts["manual_id"] == manual_id
+    assert any(item["type"] == "terminal_clearance" and item["value_mm"] == 300 for item in stored_facts["facts"])
     assert "Best matching manual text" not in body["answer"]
 
 

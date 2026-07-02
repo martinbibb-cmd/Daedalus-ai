@@ -114,7 +114,7 @@ test('depot notes endpoints require gateway configuration', async () => {
   assert.equal((await response.json()).error, 'LLM gateway is not configured');
 });
 
-test('depot notes generation uses supported json gateway endpoint', async () => {
+test('depot notes generation uses dedicated gateway endpoint', async () => {
   const originalFetch = global.fetch;
   let calledPath = '';
   let requestBody = null;
@@ -152,10 +152,56 @@ test('depot notes generation uses supported json gateway endpoint', async () => 
     const body = await response.json();
 
     assert.equal(response.status, 200);
-    assert.equal(calledPath, '/v1/json');
-    assert.equal(requestBody.prompt.includes('Customer confirmed tower required'), true);
+    assert.equal(calledPath, '/v1/depot-notes/generate');
+    assert.equal(requestBody.transcript.includes('Customer confirmed tower required'), true);
+    assert.equal(Array.isArray(requestBody.headings), true);
     assert.equal(body.sections[0].heading, 'Safe access at height');
     assert.equal(body.sections[0].text, 'Tower required for high flue; customer confirmed side gate access');
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('depot notes generation falls back to json endpoint for older gateways', async () => {
+  const originalFetch = global.fetch;
+  const calledPaths = [];
+  global.fetch = async (url) => {
+    const pathname = new URL(url).pathname;
+    calledPaths.push(pathname);
+    if (pathname === '/v1/depot-notes/generate') {
+      return new Response(JSON.stringify({ error: 'not found' }), { status: 404 });
+    }
+    return new Response(
+      JSON.stringify({
+        json: {
+          sections: [
+            {
+              heading: 'Safe access at height',
+              text: 'Tower required',
+            },
+          ],
+        },
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    );
+  };
+
+  try {
+    const response = await handleRequest(
+      new Request('https://example.test/depot-notes/generate', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ transcript: 'Customer confirmed tower required.' }),
+      }),
+      {
+        DAEDALUS_LLM_GATEWAY_URL: 'https://gateway.example',
+        DAEDALUS_LLM_API_KEY: 'test-key',
+        DAEDALUS_LLM_MODEL: 'test-model',
+      },
+    );
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(calledPaths, ['/v1/depot-notes/generate', '/v1/json']);
   } finally {
     global.fetch = originalFetch;
   }
@@ -210,7 +256,7 @@ test('depot notes generation reports upstream timeout separately', async () => {
     const body = await response.json();
 
     assert.equal(response.status, 504);
-    assert.equal(body.endpoint, '/v1/json');
+    assert.equal(body.endpoint, '/v1/depot-notes/generate');
     assert.equal(body.failureKind, 'upstream_timeout');
     assert.match(body.diagnostic, /upstream model timed out/);
   } finally {
@@ -230,7 +276,7 @@ test('depot notes debug reports route and configured model without secrets', asy
     if (pathname.endsWith('/models')) {
       return new Response(JSON.stringify({ defaultModel: 'test-model', models: [{ name: 'test-model' }] }), { status: 200 });
     }
-    if (pathname.endsWith('/v1/json')) {
+    if (pathname.endsWith('/v1/depot-notes/generate')) {
       return new Response(JSON.stringify({ json: { ok: true } }), { status: 200 });
     }
     return new Response(JSON.stringify({ error: 'not found' }), { status: 404 });
@@ -250,12 +296,12 @@ test('depot notes debug reports route and configured model without secrets', asy
 
     assert.equal(response.status, 200);
     assert.equal(body.ok, true);
-    assert.equal(body.route, '/v1/json');
+    assert.equal(body.route, '/v1/depot-notes/generate');
     assert.equal(body.config.gatewayOrigin, 'https://gateway.example');
     assert.equal(body.config.apiKeyConfigured, true);
     assert.equal(body.config.model, 'test-model');
     assert.equal(body.models.configuredModelAvailable, true);
-    assert.deepEqual(calls, ['/private/health', '/private/models', '/private/v1/json']);
+    assert.deepEqual(calls, ['/private/health', '/private/models', '/private/v1/depot-notes/generate']);
     assert.doesNotMatch(JSON.stringify(body), /test-key/);
   } finally {
     global.fetch = originalFetch;

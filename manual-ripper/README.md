@@ -12,9 +12,27 @@ Default storage path:
 /srv/daedalus/manuals/
   originals/
   extracted/
+  facts/
   indexes/
+  assets/
   metadata.sqlite
 ```
+
+NAS-backed storage can be enabled without changing code:
+
+```bash
+AI_SUPPORT_ROOT=/mnt/user/ai-support
+MANUAL_RIPPER_STORAGE_ROOT=/mnt/user/ai-support/manuals
+MANUAL_RIPPER_RAW_DIR=/mnt/user/ai-support/manuals/raw
+MANUAL_RIPPER_EXTRACTED_DIR=/mnt/user/ai-support/manuals/extracted
+MANUAL_RIPPER_FACTS_DIR=/mnt/user/ai-support/manuals/facts
+MANUAL_RIPPER_INDEXES_DIR=/mnt/user/ai-support/manuals/indexes
+MANUAL_RIPPER_ASSETS_DIR=/mnt/user/ai-support/manuals/assets
+AI_REGRESSIONS_DIR=/mnt/user/ai-support/regressions
+DEPOT_NOTES_EXAMPLES_DIR=/mnt/user/ai-support/depot-notes/examples
+```
+
+`facts/` stores structured manual facts separately from the page/index files so answer synthesis can prefer exact table facts before raw PDF text.
 
 ## Install
 
@@ -30,6 +48,11 @@ Create `/etc/daedalus-manual-ripper.env`:
 
 ```bash
 MANUAL_RIPPER_STORAGE_ROOT=/srv/daedalus/manuals
+MANUAL_RIPPER_RAW_DIR=/srv/daedalus/manuals/originals
+MANUAL_RIPPER_EXTRACTED_DIR=/srv/daedalus/manuals/extracted
+MANUAL_RIPPER_FACTS_DIR=/srv/daedalus/manuals/facts
+MANUAL_RIPPER_INDEXES_DIR=/srv/daedalus/manuals/indexes
+MANUAL_RIPPER_ASSETS_DIR=/srv/daedalus/manuals/assets
 DAEDALUS_LLM_GATEWAY_URL=https://ai.atlas-phm.uk
 DAEDALUS_LLM_API_KEY=replace-with-secret
 DAEDALUS_LLM_MODEL=llama3.2:3b

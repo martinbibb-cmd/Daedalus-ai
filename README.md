@@ -98,6 +98,12 @@ Create `/etc/daedalus-manual-ripper.env`:
 
 ```bash
 MANUAL_RIPPER_STORAGE_ROOT=/srv/daedalus/manuals
+MANUAL_RIPPER_RAW_DIR=/srv/daedalus/manuals/originals
+MANUAL_RIPPER_EXTRACTED_DIR=/srv/daedalus/manuals/extracted
+MANUAL_RIPPER_FACTS_DIR=/srv/daedalus/manuals/facts
+MANUAL_RIPPER_INDEXES_DIR=/srv/daedalus/manuals/indexes
+MANUAL_RIPPER_ASSETS_DIR=/srv/daedalus/manuals/assets
+AI_REGRESSIONS_DIR=/srv/daedalus/regressions
 DAEDALUS_LLM_GATEWAY_URL=https://ai.atlas-phm.uk
 DAEDALUS_LLM_API_KEY=replace-with-secret
 DAEDALUS_LLM_MODEL=llama3.2:3b
@@ -158,6 +164,20 @@ npm install
 npm run deploy
 ```
 
+For NAS-backed persistence, use:
+
+```bash
+AI_SUPPORT_ROOT=/mnt/user/ai-support
+MANUAL_RIPPER_STORAGE_ROOT=/mnt/user/ai-support/manuals
+MANUAL_RIPPER_RAW_DIR=/mnt/user/ai-support/manuals/raw
+MANUAL_RIPPER_EXTRACTED_DIR=/mnt/user/ai-support/manuals/extracted
+MANUAL_RIPPER_FACTS_DIR=/mnt/user/ai-support/manuals/facts
+MANUAL_RIPPER_INDEXES_DIR=/mnt/user/ai-support/manuals/indexes
+MANUAL_RIPPER_ASSETS_DIR=/mnt/user/ai-support/manuals/assets
+AI_REGRESSIONS_DIR=/mnt/user/ai-support/regressions
+DEPOT_NOTES_EXAMPLES_DIR=/mnt/user/ai-support/depot-notes/examples
+```
+
 Preferred Daedalus VM deploy flow:
 
 ```bash
@@ -177,6 +197,7 @@ Create `.env`:
 DAEDALUS_LLM_API_KEY=replace-with-a-long-random-secret
 OLLAMA_BASE_URL=http://127.0.0.1:11434
 DEFAULT_MODEL=llama3.2:3b
+DEPOT_NOTES_EXAMPLES_DIR=/mnt/user/ai-support/depot-notes/examples
 HOST=0.0.0.0
 PORT=8787
 ```

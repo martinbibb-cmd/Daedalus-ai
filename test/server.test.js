@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { buildServer } = require('../src/server');
 
@@ -210,6 +211,53 @@ test('summarise route allows a caller-provided system prompt', async () => {
 
   assert.equal(response.statusCode, 200);
   assert.equal(response.json().summary, 'I am doing well. How can I help?');
+});
+
+test('depot notes route retrieves example formatting without leaking example content', async () => {
+  const examplesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'depot-examples-'));
+  fs.writeFileSync(
+    path.join(examplesDir, 'boiler-swap.json'),
+    JSON.stringify({
+      transcript: 'customer has awkward loft access and needs a boiler swap with cylinder removal',
+      sections: [
+        { heading: 'Safe access at height', text: 'Use tower for loft hatch; protect landing' },
+        { heading: 'Installer notes', text: 'Remove old cylinder; fit filter; Not mentioned' },
+      ],
+    }),
+  );
+  let sentPrompt = '';
+  const fetchImpl = async (url, init) => {
+    assert.equal(url, 'http://ollama.test/api/generate');
+    const body = JSON.parse(init.body);
+    sentPrompt = body.prompt;
+    assert.equal(body.format, 'json');
+    return jsonResponse({
+      model: body.model,
+      response: '{"sections":[{"heading":"Safe access at height","text":"Use tower; protect landing"}]}',
+    });
+  };
+  const app = buildServer({
+    config: { ...config, depotNotesExamplesDir: examplesDir },
+    fetchImpl,
+    logger: false,
+  });
+
+  const response = await app.inject({
+    method: 'POST',
+    url: '/v1/depot-notes/generate',
+    headers: { 'x-daedalus-api-key': 'test-secret' },
+    payload: {
+      transcript: 'boiler swap with cylinder removal and awkward loft access',
+      headings: ['Safe access at height'],
+    },
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().examplesUsed, 1);
+  assert.match(sentPrompt, /Closest stored example formatting patterns/);
+  assert.match(sentPrompt, /uses ; separators|does not consistently use ; separators/);
+  assert.doesNotMatch(sentPrompt, /customer has awkward loft access/);
+  assert.doesNotMatch(sentPrompt, /Remove old cylinder/);
 });
 
 test('manual guide UI clears chat input after send', () => {

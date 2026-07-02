@@ -17,6 +17,7 @@ function loadConfig(env = process.env) {
     defaultModel: requireEnv('DEFAULT_MODEL', env.DEFAULT_MODEL),
     host: env.HOST || DEFAULT_HOST,
     port: Number.parseInt(env.PORT || String(DEFAULT_PORT), 10),
+    depotNotesExamplesDir: env.DEPOT_NOTES_EXAMPLES_DIR || '',
   };
 }
 

@@ -1,4 +1,6 @@
 const Fastify = require('fastify');
+const fs = require('node:fs');
+const path = require('node:path');
 const { extractJsonObject, generate, listModels } = require('./ollama');
 
 function sanitizeDiagnosticError(error, config) {
@@ -126,6 +128,44 @@ function buildServer({ config, fetchImpl = fetch, logger = true }) {
     };
   });
 
+  app.post('/v1/depot-notes/generate', async (request, reply) => {
+    const body = request.body || {};
+    if (!body.transcript || typeof body.transcript !== 'string') {
+      return reply.code(400).send({ error: 'transcript is required' });
+    }
+
+    const headings = Array.isArray(body.headings) ? body.headings.filter((item) => typeof item === 'string') : [];
+    const exampleHints = retrieveDepotNoteExampleHints({
+      transcript: body.transcript,
+      examplesDir: config.depotNotesExamplesDir,
+      limit: 3,
+    });
+    const prompt = buildDepotNotesPrompt({
+      transcript: body.transcript,
+      headings,
+      exampleHints,
+    });
+
+    const result = await generate({
+      config,
+      fetchImpl,
+      model: body.model,
+      system: 'You generate concise depot-compatible job notes as strict JSON.',
+      prompt,
+      format: 'json',
+      options: {
+        temperature: body.temperature ?? 0,
+      },
+    });
+
+    return {
+      model: result.model || body.model || config.defaultModel,
+      json: extractJsonObject(result.response),
+      raw: result.response,
+      examplesUsed: exampleHints.length,
+    };
+  });
+
   app.post('/v1/summarise', async (request, reply) => {
     const body = request.body || {};
     if (!body.text || typeof body.text !== 'string') {
@@ -192,6 +232,93 @@ function buildServer({ config, fetchImpl = fetch, logger = true }) {
   });
 
   return app;
+}
+
+function tokenize(text) {
+  return Array.from(new Set(String(text || '').toLowerCase().match(/[a-z0-9]{3,}/g) || []));
+}
+
+function overlapScore(left, right) {
+  const a = tokenize(left);
+  const b = new Set(tokenize(right));
+  return a.reduce((total, term) => total + (b.has(term) ? 1 : 0), 0);
+}
+
+function readDepotNoteExamples(examplesDir) {
+  if (!examplesDir) return [];
+  let entries;
+  try {
+    entries = fs.readdirSync(examplesDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return entries
+    .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith('.json'))
+    .flatMap((entry) => {
+      try {
+        const filePath = path.join(examplesDir, entry.name);
+        const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+        return [parsed];
+      } catch {
+        return [];
+      }
+    })
+    .filter((item) => item && typeof item.transcript === 'string');
+}
+
+function summarizeDepotNoteExample(example) {
+  const sections = Array.isArray(example.sections) ? example.sections : [];
+  const texts = sections.map((section) => String(section && section.text ? section.text : '')).filter(Boolean);
+  const semicolonSections = texts.filter((text) => text.includes(';')).length;
+  const notMentionedSections = texts.filter((text) => /^not mentioned$/i.test(text.trim())).length;
+  const shortSections = texts.filter((text) => text.length <= 220).length;
+  return {
+    sectionCount: sections.length,
+    usesSemicolonSeparators: semicolonSections > 0,
+    shortPracticalSections: shortSections >= Math.max(1, Math.floor(texts.length * 0.6)),
+    notMentionedSections,
+  };
+}
+
+function retrieveDepotNoteExampleHints({ transcript, examplesDir, limit }) {
+  return readDepotNoteExamples(examplesDir)
+    .map((example) => ({
+      score: overlapScore(transcript, example.transcript),
+      summary: summarizeDepotNoteExample(example),
+    }))
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map((item) => item.summary);
+}
+
+function buildDepotNotesPrompt({ transcript, headings, exampleHints }) {
+  const headingText = headings.length ? headings.join(' | ') : 'use the requested depot-note headings';
+  const exampleText = exampleHints.length
+    ? [
+        'Closest stored example formatting patterns, derived without copying example content:',
+        ...exampleHints.map((hint, index) => (
+          `Example pattern ${index + 1}: ${hint.sectionCount} sections; `
+          + `${hint.usesSemicolonSeparators ? 'uses ; separators' : 'does not consistently use ; separators'}; `
+          + `${hint.shortPracticalSections ? 'keeps sections short' : 'sections may need shortening'}; `
+          + `${hint.notMentionedSections} Not mentioned sections.`
+        )),
+      ].join('\n')
+    : 'No stored depot-note examples matched this transcript.';
+  return [
+    'Create depot notes from the transcript.',
+    'Return strict JSON only with this shape: {"sections":[{"heading":"...","text":"..."}]}',
+    'Use exactly these headings and no others: ' + headingText,
+    'Each generated section uses short practical bullets.',
+    'Use ; as the line-break separator for depot compatibility.',
+    'Keep text short enough for engineers to scan quickly.',
+    'Avoid repeating generic T&Cs.',
+    'Use "Not mentioned" only when there is no relevant job-specific information.',
+    'Never invent information not present in the transcript.',
+    exampleText,
+    'Transcript:',
+    transcript,
+  ].join('\n');
 }
 
 module.exports = { buildServer };

@@ -19,12 +19,17 @@ from pydantic import BaseModel
 APP_VERSION = "manual-ripper-0.4-guide"
 EVIDENCE_SCHEMA_VERSION = "evidence-store-v2"
 MAX_UPLOAD_BYTES = int(os.getenv("MANUAL_RIPPER_MAX_UPLOAD_BYTES", str(30 * 1024 * 1024)))
-STORAGE_ROOT = Path(os.getenv("MANUAL_RIPPER_STORAGE_ROOT", "/srv/daedalus/manuals"))
-ORIGINALS_DIR = STORAGE_ROOT / "originals"
-EXTRACTED_DIR = STORAGE_ROOT / "extracted"
-INDEXES_DIR = STORAGE_ROOT / "indexes"
-ASSETS_DIR = STORAGE_ROOT / "assets"
-DB_PATH = STORAGE_ROOT / "metadata.sqlite"
+AI_SUPPORT_ROOT_ENV = os.getenv("AI_SUPPORT_ROOT")
+AI_SUPPORT_ROOT = Path(AI_SUPPORT_ROOT_ENV or "/srv/daedalus")
+STORAGE_ROOT = Path(os.getenv("MANUAL_RIPPER_STORAGE_ROOT", str(AI_SUPPORT_ROOT / "manuals")))
+DEFAULT_RAW_SUBDIR = "raw" if AI_SUPPORT_ROOT_ENV else "originals"
+ORIGINALS_DIR = Path(os.getenv("MANUAL_RIPPER_RAW_DIR", str(STORAGE_ROOT / DEFAULT_RAW_SUBDIR)))
+EXTRACTED_DIR = Path(os.getenv("MANUAL_RIPPER_EXTRACTED_DIR", str(STORAGE_ROOT / "extracted")))
+FACTS_DIR = Path(os.getenv("MANUAL_RIPPER_FACTS_DIR", str(STORAGE_ROOT / "facts")))
+INDEXES_DIR = Path(os.getenv("MANUAL_RIPPER_INDEXES_DIR", str(STORAGE_ROOT / "indexes")))
+ASSETS_DIR = Path(os.getenv("MANUAL_RIPPER_ASSETS_DIR", str(STORAGE_ROOT / "assets")))
+REGRESSIONS_DIR = Path(os.getenv("AI_REGRESSIONS_DIR", str(AI_SUPPORT_ROOT / "regressions")))
+DB_PATH = Path(os.getenv("MANUAL_RIPPER_DB_PATH", str(STORAGE_ROOT / "metadata.sqlite")))
 VISUAL_ZOOM = float(os.getenv("MANUAL_RIPPER_RENDER_ZOOM", "1.7"))
 
 DIMENSION_TERMS = [
@@ -95,8 +100,9 @@ def db() -> Any:
 
 
 def ensure_storage() -> None:
-    for path in (ORIGINALS_DIR, EXTRACTED_DIR, INDEXES_DIR, ASSETS_DIR):
+    for path in (ORIGINALS_DIR, EXTRACTED_DIR, FACTS_DIR, INDEXES_DIR, ASSETS_DIR, REGRESSIONS_DIR):
         path.mkdir(parents=True, exist_ok=True)
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute(
             """
@@ -145,6 +151,10 @@ def extracted_path(manual_id: str) -> Path:
 
 def evidence_index_path(manual_id: str) -> Path:
     return INDEXES_DIR / f"{manual_id}.evidence.json"
+
+
+def facts_path(manual_id: str) -> Path:
+    return FACTS_DIR / f"{manual_id}.facts.json"
 
 
 def manual_assets_dir(manual_id: str) -> Path:
@@ -701,6 +711,13 @@ def build_evidence_index(manual_id: str, pages: list[dict[str, Any]] | None = No
         },
     }
     evidence_index_path(manual_id).write_text(json.dumps(index, indent=2), encoding="utf-8")
+    facts_path(manual_id).write_text(json.dumps({
+        "manual": display_manual_name(manual),
+        "manual_id": manual_id,
+        "facts": index["facts"],
+        "generated_at": index["generated_at"],
+        "schema_version": EVIDENCE_SCHEMA_VERSION,
+    }, indent=2), encoding="utf-8")
     return index
 
 
@@ -1514,6 +1531,15 @@ def health() -> dict[str, Any]:
         "service": "manual-ripper",
         "version": APP_VERSION,
         "storage_root": str(STORAGE_ROOT),
+        "storage_paths": {
+            "raw": str(ORIGINALS_DIR),
+            "extracted": str(EXTRACTED_DIR),
+            "facts": str(FACTS_DIR),
+            "indexes": str(INDEXES_DIR),
+            "assets": str(ASSETS_DIR),
+            "regressions": str(REGRESSIONS_DIR),
+            "database": str(DB_PATH),
+        },
         "gateway_configured": bool(os.getenv("DAEDALUS_LLM_GATEWAY_URL") and os.getenv("DAEDALUS_LLM_API_KEY")),
     }
 

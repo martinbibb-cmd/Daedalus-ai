@@ -2308,7 +2308,45 @@ async function handleDepotNotesGenerate(request, env) {
     return json({ error: "Transcript is required" }, 400);
   }
 
-  const prompt = [
+  let endpoint = "/v1/depot-notes/generate";
+  let result = await gatewayFetch(env, endpoint, {
+    method: "POST",
+    auth: true,
+    body: {
+      model: env.DAEDALUS_LLM_MODEL,
+      transcript,
+      headings: DEPOT_NOTE_HEADINGS,
+      temperature: 0,
+    },
+    timeoutMs: 90000,
+  });
+
+  if (result.status === 404 || result.status === 405) {
+    endpoint = "/v1/json";
+    result = await gatewayFetch(env, endpoint, {
+      method: "POST",
+      auth: true,
+      body: {
+        model: env.DAEDALUS_LLM_MODEL,
+        prompt: depotNotesPrompt(transcript),
+        temperature: 0,
+        schema: {
+          sections: DEPOT_NOTE_HEADINGS.map((heading) => ({ heading, text: "string" })),
+        },
+      },
+      timeoutMs: 90000,
+    });
+  }
+
+  if (!result.ok) {
+    return json(depotGatewayDiagnostic(result, endpoint), result.status || 502);
+  }
+
+  return json({ sections: normalizeDepotSections(extractGatewayResponse(result.body)) });
+}
+
+function depotNotesPrompt(transcript) {
+  return [
     "Create depot notes from the transcript.",
     "Return strict JSON only with this shape: {\"sections\":[{\"heading\":\"...\",\"text\":\"...\"}]}",
     "Use exactly these headings and no others: " + DEPOT_NOTE_HEADINGS.join(" | "),
@@ -2321,27 +2359,6 @@ async function handleDepotNotesGenerate(request, env) {
     "Transcript:",
     transcript,
   ].join("\n");
-
-  const endpoint = "/v1/json";
-  const result = await gatewayFetch(env, endpoint, {
-    method: "POST",
-    auth: true,
-    body: {
-      model: env.DAEDALUS_LLM_MODEL,
-      prompt,
-      temperature: 0,
-      schema: {
-        sections: DEPOT_NOTE_HEADINGS.map((heading) => ({ heading, text: "string" })),
-      },
-    },
-    timeoutMs: 90000,
-  });
-
-  if (!result.ok) {
-    return json(depotGatewayDiagnostic(result, endpoint), result.status || 502);
-  }
-
-  return json({ sections: normalizeDepotSections(extractGatewayResponse(result.body)) });
 }
 
 async function handleDepotNotesRevise(request, env) {
@@ -2440,7 +2457,7 @@ function depotGatewayDiagnostic(result, endpoint) {
 }
 
 async function handleDepotNotesDebug(env) {
-  const endpoint = "/v1/json";
+  const endpoint = "/v1/depot-notes/generate";
   const configuredModel = env.DAEDALUS_LLM_MODEL || null;
   const gatewayOrigin = safeOrigin(env.DAEDALUS_LLM_GATEWAY_URL);
   if (!hasGatewayConfig(env)) {
@@ -2465,14 +2482,14 @@ async function handleDepotNotesDebug(env) {
     ? models.body.models.map((model) => model && (model.name || model.model)).filter(Boolean)
     : [];
   const modelAvailable = configuredModel ? modelNames.includes(configuredModel) : Boolean(models.body.defaultModel);
-  const jsonProbe = await gatewayFetch(env, endpoint, {
+  const depotProbe = await gatewayFetch(env, endpoint, {
     method: "POST",
     auth: true,
     body: {
       model: configuredModel,
-      prompt: "Return this JSON exactly: {\"ok\":true}",
+      transcript: "Diagnostic transcript. No job-specific information.",
+      headings: ["Safe access at height"],
       temperature: 0,
-      schema: { ok: true },
     },
     timeoutMs: 25000,
   });
@@ -2482,8 +2499,8 @@ async function handleDepotNotesDebug(env) {
       ? depotFailureKind(models)
       : !modelAvailable
         ? "model_missing"
-        : !jsonProbe.ok
-          ? depotFailureKind(jsonProbe)
+        : !depotProbe.ok
+          ? depotFailureKind(depotProbe)
           : null;
 
   return json({
@@ -2504,12 +2521,12 @@ async function handleDepotNotesDebug(env) {
       configuredModelAvailable: modelAvailable,
       modelCount: modelNames.length,
     },
-    jsonProbe: {
-      ...diagnosticFromResult(jsonProbe),
-      failureKind: jsonProbe.ok ? undefined : depotFailureKind(jsonProbe),
+    depotNotesProbe: {
+      ...diagnosticFromResult(depotProbe),
+      failureKind: depotProbe.ok ? undefined : depotFailureKind(depotProbe),
     },
     failureKind,
-    diagnostic: failureKind ? depotDiagnosticMessage(failureKind, endpoint) : "Depot Notes JSON route is reachable and the configured model is available.",
+    diagnostic: failureKind ? depotDiagnosticMessage(failureKind, endpoint) : "Depot Notes route is reachable and the configured model is available.",
   }, failureKind ? 502 : 200);
 }
 
