@@ -962,6 +962,35 @@ def no_relevant_manual_answer() -> dict[str, Any]:
     }
 
 
+def is_boiler_spec_question(query: str) -> bool:
+    lowered = query.lower()
+    return (
+        requires_direct_fact_answer(query)
+        or any(term in lowered for term in (
+            "boiler",
+            "ri",
+            "flue",
+            "terminal",
+            "bypass",
+            "auto bypass",
+            "pump",
+            "pressure",
+            "gas rate",
+            "electrical supply",
+            "fault code",
+            "clearance",
+        ))
+    )
+
+
+def manual_matches_boiler_domain(manual_id: str) -> bool:
+    manual = get_manual_or_404(manual_id)
+    metadata = metadata_text(manual)
+    if any(term in metadata for term in ("price", "catalog", "catalogue", "pack", "shower", "building-regulation", "approved document")):
+        return False
+    return any(term in metadata for term in ("boiler", "greenstar", "worcester", "glowworm", "vaillant", "ideal", "baxi", "heating"))
+
+
 def query_terms(query: str) -> list[str]:
     terms = tokenize(query)
     lowered = query.lower()
@@ -1936,6 +1965,8 @@ def query_manual(manual_id: str, request: QueryRequest) -> dict[str, Any]:
             "evidence": [],
             "visual_assets": [],
         }
+    if is_boiler_spec_question(request.question) and not is_locator_question(request.question):
+        return direct_fact_missing_answer(manual_id)
     extractive = extractive_answer_from_results(request.question, evidence)
     if extractive:
         return {"manual_id": manual_id, **extractive}
@@ -1961,6 +1992,24 @@ def query_all_manuals(request: QueryRequest) -> dict[str, Any]:
     if not evidence:
         return direct_fact_missing_answer(None) if requires_direct_fact_answer(request.question) else no_relevant_manual_answer()
 
+    rejected_documents: list[dict[str, Any]] = []
+    if is_boiler_spec_question(request.question):
+        filtered: list[dict[str, Any]] = []
+        for item in evidence:
+            manual_id = item.get("manual_id")
+            if manual_id and manual_matches_boiler_domain(manual_id):
+                filtered.append(item)
+            else:
+                rejected_documents.append({
+                    "manual_id": manual_id,
+                    "manual": item.get("manual"),
+                    "page": item.get("page"),
+                    "reason": "document type is not an appliance manual for this boiler-spec question",
+                })
+        evidence = filtered
+        if not evidence:
+            return direct_fact_missing_answer(None) if requires_direct_fact_answer(request.question) else no_relevant_manual_answer()
+
     intent_terms = specific_manual_terms(request.question)
     if intent_terms:
         evidence = [item for item in evidence if matches_specific_manual_intent(item, intent_terms)]
@@ -1975,7 +2024,7 @@ def query_all_manuals(request: QueryRequest) -> dict[str, Any]:
             continue
         checked_manuals.add(manual_id)
         manual_pages = candidate_page_numbers([candidate for candidate in evidence if candidate.get("manual_id") == manual_id])
-        rejected_documents = [
+        lower_ranked_rejections = [
             {
                 "manual_id": candidate.get("manual_id"),
                 "manual": candidate.get("manual"),
@@ -1985,7 +2034,7 @@ def query_all_manuals(request: QueryRequest) -> dict[str, Any]:
             for candidate in evidence
             if candidate.get("manual_id") and candidate.get("manual_id") != manual_id
         ]
-        deterministic = deterministic_answer(manual_id, request.question, page_numbers=manual_pages, rejected_documents=rejected_documents)
+        deterministic = deterministic_answer(manual_id, request.question, page_numbers=manual_pages, rejected_documents=[*rejected_documents, *lower_ranked_rejections])
         if deterministic:
             if deterministic.get("missing_exact_fact") and requires_direct_fact_answer(request.question):
                 saw_direct_fact_candidate = True
@@ -1994,6 +2043,9 @@ def query_all_manuals(request: QueryRequest) -> dict[str, Any]:
 
     if requires_direct_fact_answer(request.question):
         return direct_fact_missing_answer(next(iter(checked_manuals), None) if saw_direct_fact_candidate else None)
+
+    if is_boiler_spec_question(request.question) and not is_locator_question(request.question):
+        return no_relevant_manual_answer()
 
     extractive = extractive_answer_from_results(request.question, evidence)
     if extractive:

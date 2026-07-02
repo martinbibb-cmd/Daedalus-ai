@@ -695,6 +695,39 @@ def test_global_specific_ri_query_rejects_unrelated_global_results(tmp_path, mon
     assert body["citations"] == []
 
 
+def test_boiler_spec_question_does_not_dump_search_results_when_no_fact_exists(tmp_path, monkeypatch):
+    configure_storage(tmp_path, monkeypatch)
+    seed_manual("greenstar-ri")
+    seed_unrelated_manual("shower-pack")
+    client = TestClient(main.app)
+
+    response = client.post("/manuals/query", json={"question": "How much is an auto bypass?", "limit": 6})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["answer"] == "I could not find relevant evidence for that in the selected/manual context."
+    assert body["evidence"] == []
+    assert body["citations"] == []
+    assert "Best matching manual text" not in body["answer"]
+    assert "Lead Time Category" not in body["answer"]
+    assert "Approved Documents" not in body["answer"]
+
+
+def test_boiler_spec_question_rejects_catalogue_and_building_reg_documents(tmp_path, monkeypatch):
+    configure_storage(tmp_path, monkeypatch)
+    seed_part_l_manual()
+    seed_unrelated_manual("shower-pack")
+    client = TestClient(main.app)
+
+    response = client.post("/manuals/query", json={"question": "What is the lift weight of the Ri?", "limit": 6})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["answer"] == main.MISSING_EXACT_FACT_ANSWER
+    assert body["evidence"] == []
+    assert body["citations"] == []
+
+
 def test_terminal_clearance_opening_answers_from_matching_table_row(tmp_path, monkeypatch):
     configure_storage(tmp_path, monkeypatch)
     manual_id = seed_manual_with_flue_tables()
