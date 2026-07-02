@@ -238,7 +238,7 @@ test('depot notes debug reports route and configured model without secrets', asy
 
   try {
     const response = await handleRequest(
-      new Request('https://example.test/depot-notes/debug?admin_key=secret'),
+      new Request('https://example.test/depot-notes/debug'),
       {
         ADMIN_KEY: 'secret',
         DAEDALUS_LLM_GATEWAY_URL: 'https://gateway.example/private',

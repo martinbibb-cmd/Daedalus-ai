@@ -2165,8 +2165,6 @@ async function handleRequest(request, env) {
   }
 
   if (request.method === "GET" && url.pathname === "/depot-notes/debug") {
-    const blocked = requireAdmin(request, env);
-    if (blocked) return blocked;
     return handleDepotNotesDebug(env);
   }
 
