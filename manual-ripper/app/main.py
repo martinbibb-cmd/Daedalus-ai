@@ -19,7 +19,18 @@ from pydantic import BaseModel
 APP_VERSION = "manual-ripper-0.4-guide"
 EVIDENCE_SCHEMA_VERSION = "evidence-store-v3"
 MISSING_EXACT_FACT_ANSWER = "I don’t have that exact fact extracted yet."
-DIRECT_FACT_INTENTS = {"dimensions", "weight", "max_flue_length", "terminal_clearance", "boiler_type"}
+DIRECT_FACT_INTENTS = {
+    "dimensions",
+    "weight",
+    "max_flue_length",
+    "terminal_clearance",
+    "boiler_type",
+    "gas_rate",
+    "electrical",
+    "fault_code",
+    "pressure",
+    "wiring",
+}
 MAX_UPLOAD_BYTES = int(os.getenv("MANUAL_RIPPER_MAX_UPLOAD_BYTES", str(30 * 1024 * 1024)))
 AI_SUPPORT_ROOT_ENV = os.getenv("AI_SUPPORT_ROOT")
 AI_SUPPORT_ROOT = Path(AI_SUPPORT_ROOT_ENV or "/srv/daedalus")
@@ -67,8 +78,12 @@ QUESTION_INTENTS = {
     "max_flue_length",
     "terminal_clearance",
     "fault_code",
+    "gas_rate",
+    "electrical",
+    "pressure",
     "wiring",
     "weight",
+    "boiler_type",
     "generic",
 }
 
@@ -475,10 +490,16 @@ def classify_question_intent(question: str) -> str:
         return "boiler_type"
     if any(term in lowered for term in ("weight", "heavy", "weigh", "lift weight", "appliance weight")):
         return "weight"
+    if any(term in lowered for term in ("gas rate", "gas rates", "gas consumption", "co2", "co/co2")):
+        return "gas_rate"
+    if any(term in lowered for term in ("pressure", "bar", "water pressure", "gas pressure", "inlet pressure")):
+        return "pressure"
     if any(term in lowered for term in ("fault code", "fault codes", "error code", "diagnostic code")):
         return "fault_code"
     if any(term in lowered for term in ("wiring", "wire", "electrical connection", "230v", "thermostat")):
         return "wiring"
+    if any(term in lowered for term in ("electrical supply", "electricity supply", "fuse", "mains supply")):
+        return "electrical"
     if any(term in lowered for term in ("maximum flue length", "max flue length", "flue length", "equivalent length", "90", "elbow")):
         return "max_flue_length"
     if "terminal" in lowered and any(term in lowered for term in ("clearance", "position", "distance", "opening", "window", "vent", "corner", "change of fabric")):
@@ -501,6 +522,13 @@ def is_locator_question(question: str) -> bool:
         "mentioned on page",
         "where is it mentioned",
     ))
+
+
+def is_vague_question(question: str) -> bool:
+    terms = tokenize(question)
+    if len(terms) <= 1 and not any(char.isdigit() for char in question):
+        return True
+    return clean_text(question).lower() in {"test", "search", "manual", "boiler", "info", "information"}
 
 
 def requires_direct_fact_answer(question: str) -> bool:
@@ -1820,6 +1848,8 @@ def answer_from_evidence_store(manual_id: str, question: str, facts_override: li
         return answer_weight_from_facts(manual_id, question, facts_override, debug) or no_structured_fact_answer(manual_id, intent)
     if intent == "boiler_type":
         return answer_boiler_type_from_facts(manual_id, question, facts_override, debug) or no_structured_fact_answer(manual_id, intent)
+    if intent in DIRECT_FACT_INTENTS and intent != "dimensions":
+        return no_structured_fact_answer(manual_id, intent)
 
     dimension_requested = is_dimension_question(question) or any(term in lowered for term in ("where did that come from", "open the diagram", "show me the page"))
     if not dimension_requested:
@@ -2161,6 +2191,17 @@ def manual_asset(manual_id: str, asset_id: str) -> FileResponse:
 @app.post("/manuals/{manual_id}/query")
 def query_manual(manual_id: str, request: QueryRequest) -> dict[str, Any]:
     get_manual_or_404(manual_id)
+    if is_vague_question(request.question):
+        return {
+            "answer": "Please ask a specific manual question, for example a model and the fact you need.",
+            "manual_id": manual_id,
+            "citations": [],
+            "confidence": "low",
+            "evidence": [],
+            "visual_assets": [],
+            "deterministic": True,
+            "source": "vague-query",
+        }
     if requires_direct_fact_answer(request.question):
         locator_evidence = search_pages(request.question, manual_id=manual_id, limit=request.limit)
         page_numbers = candidate_page_numbers(locator_evidence)
@@ -2185,9 +2226,12 @@ def query_manual(manual_id: str, request: QueryRequest) -> dict[str, Any]:
         }
     if is_boiler_spec_question(request.question) and not is_locator_question(request.question):
         return direct_fact_missing_answer(manual_id)
-    extractive = extractive_answer_from_results(request.question, evidence)
-    if extractive:
-        return {"manual_id": manual_id, **extractive}
+    if is_locator_question(request.question):
+        extractive = extractive_answer_from_results(request.question, evidence)
+        if extractive:
+            return {"manual_id": manual_id, **extractive}
+    else:
+        return no_relevant_manual_answer()
     answer = ask_gateway(request.question, evidence)
     citations = [{"page": item["page"], "label": f"Page {item['page']}"} for item in evidence]
     return {
@@ -2206,6 +2250,17 @@ def query_manual(manual_id: str, request: QueryRequest) -> dict[str, Any]:
 
 @app.post("/manuals/query")
 def query_all_manuals(request: QueryRequest) -> dict[str, Any]:
+    if is_vague_question(request.question):
+        return {
+            "answer": "Please ask a specific manual question, for example a model and the fact you need.",
+            "manual_id": None,
+            "citations": [],
+            "confidence": "low",
+            "evidence": [],
+            "visual_assets": [],
+            "deterministic": True,
+            "source": "vague-query",
+        }
     evidence = search_pages(request.question, manual_id=None, limit=request.limit)
     if not evidence:
         return direct_fact_missing_answer(None) if requires_direct_fact_answer(request.question) else no_relevant_manual_answer()
@@ -2280,9 +2335,12 @@ def query_all_manuals(request: QueryRequest) -> dict[str, Any]:
     if is_boiler_spec_question(request.question) and not is_locator_question(request.question):
         return no_relevant_manual_answer()
 
-    extractive = extractive_answer_from_results(request.question, evidence)
-    if extractive:
-        return {"manual_id": evidence[0].get("manual_id"), **extractive}
+    if is_locator_question(request.question):
+        extractive = extractive_answer_from_results(request.question, evidence)
+        if extractive:
+            return {"manual_id": evidence[0].get("manual_id"), **extractive}
+    else:
+        return no_relevant_manual_answer()
 
     answer = ask_gateway(request.question, evidence)
     citations = [

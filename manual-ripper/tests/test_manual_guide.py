@@ -785,6 +785,41 @@ def test_boiler_spec_question_rejects_catalogue_and_building_reg_documents(tmp_p
     assert body["citations"] == []
 
 
+def test_vague_test_query_does_not_dump_search_results(tmp_path, monkeypatch):
+    configure_storage(tmp_path, monkeypatch)
+    seed_manual("greenstar-ri")
+    client = TestClient(main.app)
+
+    response = client.post("/manuals/query", json={"question": "Test", "limit": 6})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["source"] == "vague-query"
+    assert body["confidence"] == "low"
+    assert body["evidence"] == []
+    assert body["citations"] == []
+    assert "Best matching manual text" not in body["answer"]
+    assert "Match count" not in body["answer"]
+    assert "pressure test" not in body["answer"].lower()
+
+
+def test_gas_rate_question_requires_structured_fact_not_search_dump(tmp_path, monkeypatch):
+    configure_storage(tmp_path, monkeypatch)
+    seed_manual("greenstar-ri")
+    client = TestClient(main.app)
+
+    response = client.post("/manuals/query", json={"question": "What is the gas rate for the Ri?", "limit": 6})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["answer"] == main.MISSING_EXACT_FACT_ANSWER
+    assert body["confidence"] == "low"
+    assert body["evidence"] == []
+    assert body["citations"] == []
+    assert "Best matching manual text" not in body["answer"]
+    assert "Match count" not in body["answer"]
+
+
 def test_pricebook_containing_32cdi_is_not_treated_as_boiler_manual(tmp_path, monkeypatch):
     configure_storage(tmp_path, monkeypatch)
     manual_id = seed_pricebook_with_boiler_models()
