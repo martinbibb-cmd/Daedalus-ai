@@ -2470,15 +2470,16 @@ async function handleDepotNotesDebug(env) {
 
   const health = await gatewayFetch(env, "/health", { method: "GET", auth: false, timeoutMs: 8000 });
   const models = await gatewayFetch(env, "/models", { method: "GET", auth: true, timeoutMs: 12000 });
+  const effectiveModel = configuredModel || models.body.defaultModel || health.body.defaultModel || null;
   const modelNames = models.ok && Array.isArray(models.body.models)
     ? models.body.models.map((model) => model && (model.name || model.model)).filter(Boolean)
     : [];
-  const modelAvailable = configuredModel ? modelNames.includes(configuredModel) : Boolean(models.body.defaultModel);
+  const modelAvailable = effectiveModel ? modelNames.includes(effectiveModel) : Boolean(models.body.defaultModel);
   const depotProbe = await gatewayFetch(env, endpoint, {
     method: "POST",
     auth: true,
     body: {
-      model: configuredModel,
+      model: effectiveModel,
       transcript: "Diagnostic transcript. No job-specific information.",
       headings: ["Safe access at height"],
       temperature: 0,
@@ -2502,14 +2503,16 @@ async function handleDepotNotesDebug(env) {
       gatewayOrigin,
       apiKeyConfigured: Boolean(env.DAEDALUS_LLM_API_KEY),
       modelConfigured: Boolean(env.DAEDALUS_LLM_MODEL),
-      model: configuredModel,
+      model: effectiveModel,
+      workerConfiguredModel: configuredModel,
     },
     route: endpoint,
     health: diagnosticFromResult(health),
     models: {
       ...diagnosticFromResult(models),
       defaultModel: models.body.defaultModel || configuredModel,
-      configuredModel,
+      configuredModel: effectiveModel,
+      workerConfiguredModel: configuredModel,
       configuredModelAvailable: modelAvailable,
       modelCount: modelNames.length,
     },
@@ -2586,7 +2589,9 @@ async function handleModels(env) {
 
   return json({
     defaultModel: result.body.defaultModel || configuredModel,
-    configuredModel,
+    configuredModel: configuredModel || result.body.defaultModel || null,
+    workerConfiguredModel: configuredModel,
+    provider: result.body.provider || null,
     models: Array.isArray(result.body.models) ? result.body.models : [],
   });
 }
@@ -2610,7 +2615,8 @@ async function handleHealth(env) {
       gatewayOrigin,
       apiKeyConfigured: Boolean(env.DAEDALUS_LLM_API_KEY),
       modelConfigured: Boolean(env.DAEDALUS_LLM_MODEL),
-      model: configuredModel,
+      model: configuredModel || (models && models.body && models.body.defaultModel) || null,
+      workerConfiguredModel: configuredModel,
     },
     gateway: diagnosticFromResult(health),
     tunnel: {
@@ -2623,6 +2629,7 @@ async function handleHealth(env) {
       status: selfTest.status,
       latencyMs: selfTest.ms,
       model: selfTest.body.model || configuredModel,
+      provider: selfTest.body.provider || health.body.provider,
       error: selfTest.ok ? undefined : classifyGatewayError(selfTest),
     } : {
       ok: false,

@@ -2,9 +2,9 @@
 
 ## daedalus-llm-gateway
 
-Fastify API gateway for private Ollama access on the Daedalus network.
+Fastify API gateway for private Daedalus LLM provider access.
 
-Apps should call this gateway only. Do not expose raw Ollama publicly.
+Apps should call this gateway only. Do not expose provider credentials publicly.
 
 ## Pet Llama v0.2 Engineering Console
 
@@ -16,7 +16,7 @@ Architecture:
 Browser petllama UI
   -> POST /chat on the petllama Worker
   -> Daedalus LLM gateway at https://ai.atlas-phm.uk
-  -> private Ollama backend
+  -> private LLM provider backend
 ```
 
 The browser only calls the Worker:
@@ -58,7 +58,7 @@ Pet Llama Worker
   -> Manual Ripper service on the Daedalus VM
   -> /srv/daedalus/manuals local storage
   -> Daedalus LLM Gateway
-  -> Ollama
+  -> configured LLM provider
 ```
 
 Manual data is not stored in Cloudflare. The Worker is a thin proxy to the private Manual Ripper service.
@@ -106,7 +106,7 @@ MANUAL_RIPPER_ASSETS_DIR=/srv/daedalus/manuals/assets
 AI_REGRESSIONS_DIR=/srv/daedalus/regressions
 DAEDALUS_LLM_GATEWAY_URL=https://ai.atlas-phm.uk
 DAEDALUS_LLM_API_KEY=replace-with-secret
-DAEDALUS_LLM_MODEL=llama3.2:3b
+DAEDALUS_LLM_MODEL=gemini-flash-latest
 HOST=127.0.0.1
 PORT=8791
 ```
@@ -153,7 +153,7 @@ Do not commit `DAEDALUS_LLM_API_KEY` to the repo. Non-secret Worker vars are set
 
 ```toml
 DAEDALUS_LLM_GATEWAY_URL = "https://ai.atlas-phm.uk"
-DAEDALUS_LLM_MODEL = "llama3.2:3b"
+DAEDALUS_LLM_MODEL = "gemini-flash-latest"
 ```
 
 Manual deploy flow:
@@ -232,7 +232,7 @@ Daedalus and Asguardian should use the gateway only:
 ```bash
 DAEDALUS_LLM_BASE_URL=http://daedalus-ai:8787
 DAEDALUS_LLM_API_KEY=<same-long-secret>
-DAEDALUS_LLM_MODEL=llama3.2:3b
+DAEDALUS_LLM_MODEL=gemini-flash-latest
 ```
 
 Do not configure apps to call `:11434` directly.
@@ -263,7 +263,7 @@ curl http://127.0.0.1:8787/models \
 
 ### GET /v1/self-test
 
-Protected diagnostic check that asks the configured Ollama backend to generate through `DEFAULT_MODEL`.
+Protected diagnostic check that asks the configured provider backend to generate through `DEFAULT_MODEL`.
 
 ```bash
 curl http://127.0.0.1:8787/v1/self-test \
@@ -293,7 +293,7 @@ curl http://127.0.0.1:8787/v1/summarise \
   -H "content-type: application/json" \
   -H "x-daedalus-api-key: $DAEDALUS_LLM_API_KEY" \
   -d '{
-    "text": "Daedalus is an internal system that should call the LLM gateway instead of Ollama directly.",
+    "text": "Daedalus is an internal system that should call the LLM gateway instead of provider APIs directly.",
     "maxWords": 50
   }'
 ```
@@ -306,7 +306,7 @@ curl http://127.0.0.1:8787/v1/extract-evidence \
   -H "x-daedalus-api-key: $DAEDALUS_LLM_API_KEY" \
   -d '{
     "question": "What evidence supports the gateway security model?",
-    "text": "Raw Ollama is private on Tailscale. Apps authenticate to the gateway with x-daedalus-api-key. The gateway forwards approved requests to Ollama."
+    "text": "Provider credentials are private. Apps authenticate to the gateway with x-daedalus-api-key. The gateway forwards approved requests to the configured provider."
   }'
 ```
 
@@ -318,8 +318,9 @@ Create `/etc/daedalus-llm-gateway.env`:
 
 ```bash
 DAEDALUS_LLM_API_KEY=replace-with-a-long-random-secret
-OLLAMA_BASE_URL=http://127.0.0.1:11434
-DEFAULT_MODEL=llama3.2:3b
+LLM_PROVIDER=gemini
+GEMINI_API_KEY=replace-with-google-gemini-key
+DEFAULT_MODEL=gemini-flash-latest
 HOST=0.0.0.0
 PORT=8787
 ```
@@ -332,7 +333,7 @@ sudo systemctl enable --now daedalus-llm-gateway
 sudo systemctl status daedalus-llm-gateway
 ```
 
-Firewall `8787` so only Tailscale/LAN clients can reach the gateway. Keep Ollama `11434` private to `daedalus-ai`.
+Firewall `8787` so only Tailscale/LAN clients can reach the gateway. Keep provider credentials private on `daedalus-ai`.
 
 Example UFW policy, adjusting the LAN CIDR if needed:
 
