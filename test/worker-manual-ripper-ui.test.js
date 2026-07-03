@@ -108,7 +108,7 @@ test('depot notes page renders editable section cards instead of one blob', asyn
   assert.doesNotMatch(html, /one giant combined text block/);
 });
 
-test('depot notes endpoints require gateway configuration', async () => {
+test('depot notes endpoints require LLM provider configuration', async () => {
   const response = await handleRequest(
     new Request('https://example.test/depot-notes/generate', {
       method: 'POST',
@@ -119,7 +119,7 @@ test('depot notes endpoints require gateway configuration', async () => {
   );
 
   assert.equal(response.status, 500);
-  assert.equal((await response.json()).error, 'LLM gateway is not configured');
+  assert.equal((await response.json()).error, 'LLM provider is not configured');
 });
 
 test('depot notes generation uses dedicated gateway endpoint', async () => {
@@ -165,6 +165,53 @@ test('depot notes generation uses dedicated gateway endpoint', async () => {
     assert.equal(Array.isArray(requestBody.headings), true);
     assert.equal(body.sections[0].heading, 'Safe access at height');
     assert.equal(body.sections[0].text, 'Tower required for high flue; customer confirmed side gate access');
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('depot notes generation can call Gemini directly from Worker', async () => {
+  const originalFetch = global.fetch;
+  let calledUrl = '';
+  let requestBody = null;
+  global.fetch = async (url, init) => {
+    calledUrl = String(url);
+    requestBody = JSON.parse(init.body);
+    return new Response(
+      JSON.stringify({
+        candidates: [
+          {
+            content: {
+              parts: [
+                { text: '{"sections":[{"heading":"Safe access at height","text":"Use tower; protect landing"}]}' },
+              ],
+            },
+          },
+        ],
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    );
+  };
+
+  try {
+    const response = await handleRequest(
+      new Request('https://example.test/depot-notes/generate', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ transcript: 'Use tower and protect landing.' }),
+      }),
+      {
+        GEMINI_API_KEY: 'gemini-key',
+        DAEDALUS_LLM_MODEL: 'gemini-flash-latest',
+      },
+    );
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.match(calledUrl, /generativelanguage\.googleapis\.com\/v1beta\/models\/gemini-flash-latest:generateContent/);
+    assert.equal(requestBody.generationConfig.responseMimeType, 'application/json');
+    assert.match(requestBody.contents[0].parts[0].text, /Create depot notes/);
+    assert.equal(body.sections[0].text, 'Use tower; protect landing');
   } finally {
     global.fetch = originalFetch;
   }

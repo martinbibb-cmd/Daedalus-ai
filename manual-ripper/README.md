@@ -1,8 +1,8 @@
 # Manual Ripper
 
-Local VM service for boiler/heating manual ingestion and evidence-backed question answering.
+Service for boiler/heating manual ingestion and evidence-backed question answering. It can run on the VM or as a NAS/Unraid container.
 
-This is RAG, not model training. PDFs are stored locally, extracted page by page, searched with keyword scoring, and only the retrieved evidence is sent to the Daedalus LLM Gateway for answer generation.
+This is RAG, not model training. PDFs are stored on the configured manual storage path, extracted page by page, and answered from structured evidence/facts.
 
 ## Storage
 
@@ -89,3 +89,38 @@ sudo systemctl status daedalus-manual-ripper
 ```
 
 Keep the service private, ideally behind Cloudflare Tunnel or local network access.
+
+## Unraid / NAS Container
+
+The container stores all persistent data under `/mnt/user/ai-support` on the host.
+
+```bash
+cd manual-ripper
+docker compose -f docker-compose.unraid.yml up -d --build
+```
+
+Required Unraid path mapping:
+
+```text
+/mnt/user/ai-support  ->  /mnt/user/ai-support
+```
+
+Expose port `8791` only on the LAN or through a controlled Cloudflare Tunnel route.
+
+Point the Worker at the NAS-hosted service:
+
+```toml
+MANUAL_RIPPER_BASE_URL = "https://manuals.atlas-phm.uk"
+```
+
+If using a direct LAN URL for testing:
+
+```toml
+MANUAL_RIPPER_BASE_URL = "http://<unraid-ip>:8791"
+```
+
+Health check:
+
+```bash
+curl http://<unraid-ip>:8791/health
+```

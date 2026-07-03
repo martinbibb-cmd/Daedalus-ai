@@ -2285,7 +2285,7 @@ async function handleManualProxy(request, env, url, options = {}) {
 
 async function handleDepotNotesGenerate(request, env) {
   if (!hasGatewayConfig(env)) {
-    return json({ error: "LLM gateway is not configured" }, 500);
+    return json({ error: "LLM provider is not configured" }, 500);
   }
 
   let body;
@@ -2452,10 +2452,13 @@ async function handleDepotNotesDebug(env) {
   const endpoint = "/v1/depot-notes/generate";
   const configuredModel = env.DAEDALUS_LLM_MODEL || null;
   const gatewayOrigin = safeOrigin(env.DAEDALUS_LLM_GATEWAY_URL);
+  const provider = hasDirectGeminiConfig(env) ? "gemini" : "gateway";
   if (!hasGatewayConfig(env)) {
     return json({
       ok: false,
       config: {
+        provider: "missing",
+        geminiConfigured: Boolean(env.GEMINI_API_KEY),
         gatewayConfigured: Boolean(env.DAEDALUS_LLM_GATEWAY_URL),
         gatewayOrigin,
         apiKeyConfigured: Boolean(env.DAEDALUS_LLM_API_KEY),
@@ -2464,7 +2467,7 @@ async function handleDepotNotesDebug(env) {
       },
       route: endpoint,
       failureKind: "config_missing",
-      diagnostic: "Set DAEDALUS_LLM_GATEWAY_URL, DAEDALUS_LLM_API_KEY, and DAEDALUS_LLM_MODEL.",
+      diagnostic: "Set GEMINI_API_KEY for direct Worker Gemini, or set DAEDALUS_LLM_GATEWAY_URL and DAEDALUS_LLM_API_KEY for the legacy gateway.",
     }, 500);
   }
 
@@ -2499,6 +2502,8 @@ async function handleDepotNotesDebug(env) {
   return json({
     ok: !failureKind,
     config: {
+      provider,
+      geminiConfigured: Boolean(env.GEMINI_API_KEY),
       gatewayConfigured: Boolean(env.DAEDALUS_LLM_GATEWAY_URL),
       gatewayOrigin,
       apiKeyConfigured: Boolean(env.DAEDALUS_LLM_API_KEY),
@@ -2539,7 +2544,7 @@ function depotFailureKind(result) {
 }
 
 function depotDiagnosticMessage(kind, endpoint) {
-  if (kind === "config_missing") return "Worker environment is missing gateway URL, API key, or model.";
+  if (kind === "config_missing") return "Worker environment is missing GEMINI_API_KEY or legacy gateway URL/API key configuration.";
   if (kind === "gateway_unreachable") return "The Worker could not reach the configured LLM gateway origin.";
   if (kind === "auth_failed") return "The LLM gateway rejected the Worker API key.";
   if (kind === "route_missing") return "The configured LLM gateway does not serve " + endpoint + ". Deploy/restart the gateway code that includes this route.";
@@ -2599,6 +2604,7 @@ async function handleModels(env) {
 async function handleHealth(env) {
   const gatewayOrigin = safeOrigin(env.DAEDALUS_LLM_GATEWAY_URL);
   const configuredModel = env.DAEDALUS_LLM_MODEL || null;
+  const provider = hasDirectGeminiConfig(env) ? "gemini" : hasGatewayConfig(env) ? "gateway" : "missing";
   const health = await gatewayFetch(env, "/health", { method: "GET", auth: false, timeoutMs: 8000 });
   const models = hasGatewayConfig(env)
     ? await gatewayFetch(env, "/models", { method: "GET", auth: true, timeoutMs: 10000 })
@@ -2611,6 +2617,8 @@ async function handleHealth(env) {
     ok: Boolean(health.ok && (!selfTest || selfTest.ok)),
     version: APP_VERSION,
     config: {
+      provider,
+      geminiConfigured: Boolean(env.GEMINI_API_KEY),
       gatewayConfigured: Boolean(env.DAEDALUS_LLM_GATEWAY_URL),
       gatewayOrigin,
       apiKeyConfigured: Boolean(env.DAEDALUS_LLM_API_KEY),
@@ -2635,7 +2643,7 @@ async function handleHealth(env) {
       ok: false,
       status: 0,
       model: configuredModel,
-      error: "LLM gateway is not configured",
+      error: "LLM provider is not configured",
     },
     models: models && models.ok && Array.isArray(models.body.models) ? models.body.models : [],
   });
@@ -2724,10 +2732,18 @@ async function handleChat(request, env) {
 }
 
 function hasGatewayConfig(env) {
-  return Boolean(env.DAEDALUS_LLM_GATEWAY_URL && env.DAEDALUS_LLM_API_KEY);
+  return Boolean(hasDirectGeminiConfig(env) || (env.DAEDALUS_LLM_GATEWAY_URL && env.DAEDALUS_LLM_API_KEY));
+}
+
+function hasDirectGeminiConfig(env) {
+  return Boolean(env.GEMINI_API_KEY);
 }
 
 async function gatewayFetch(env, endpoint, options = {}) {
+  if (hasDirectGeminiConfig(env)) {
+    return geminiFetch(env, endpoint, options);
+  }
+
   const started = Date.now();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), options.timeoutMs || DEFAULT_TIMEOUT_MS);
@@ -2768,6 +2784,133 @@ async function gatewayFetch(env, endpoint, options = {}) {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+async function geminiFetch(env, endpoint, options = {}) {
+  const started = Date.now();
+  const model = env.DAEDALUS_LLM_MODEL || "gemini-flash-latest";
+  if (endpoint === "/health") {
+    return { ok: true, status: 200, ms: Date.now() - started, body: { ok: true, provider: "gemini", defaultModel: model } };
+  }
+  if (endpoint === "/models") {
+    return { ok: true, status: 200, ms: Date.now() - started, body: { provider: "gemini", defaultModel: model, models: [{ name: model }] } };
+  }
+  if (endpoint === "/v1/self-test") {
+    return geminiGenerate(env, {
+      prompt: "Reply with this exact sentence and nothing else: Daedalus LLM is working.",
+      system: "You are a concise diagnostic check.",
+      temperature: 0,
+      model,
+      started,
+      responseMode: "chat",
+    });
+  }
+
+  const body = options.body || {};
+  if (endpoint === "/v1/chat") {
+    return geminiGenerate(env, {
+      prompt: body.message || "",
+      system: body.system || "You are a concise conversational assistant.",
+      temperature: body.temperature ?? 0.4,
+      model: body.model || model,
+      started,
+      responseMode: "chat",
+    });
+  }
+  if (endpoint === "/v1/json") {
+    const schemaInstruction = body.schema
+      ? "\nReturn JSON matching this schema/shape only:\n" + JSON.stringify(body.schema)
+      : "\nReturn only valid JSON. Do not wrap it in markdown.";
+    return geminiGenerate(env, {
+      prompt: String(body.prompt || "") + schemaInstruction,
+      system: body.system || "You are a precise JSON API. Return only valid JSON.",
+      temperature: body.temperature ?? 0,
+      model: body.model || model,
+      started,
+      responseMode: "json",
+    });
+  }
+  if (endpoint === "/v1/depot-notes/generate") {
+    return geminiGenerate(env, {
+      prompt: depotNotesPrompt(String(body.transcript || "")),
+      system: "You generate concise depot-compatible job notes as strict JSON.",
+      temperature: body.temperature ?? 0,
+      model: body.model || model,
+      started,
+      responseMode: "json",
+    });
+  }
+  if (endpoint === "/v1/summarise") {
+    return geminiGenerate(env, {
+      prompt: [body.instruction || "Summarise the text concisely.", "", "Text:", body.text || ""].join("\n"),
+      system: body.system || "You summarise text accurately and concisely.",
+      temperature: body.temperature ?? 0.2,
+      model: body.model || model,
+      started,
+      responseMode: "summary",
+    });
+  }
+
+  return { ok: false, status: 404, ms: Date.now() - started, body: { error: "Gemini direct route missing" } };
+}
+
+async function geminiGenerate(env, { prompt, system, temperature, model, started, responseMode }) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+  try {
+    const generationConfig = { temperature };
+    if (responseMode === "json") generationConfig.responseMimeType = "application/json";
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "X-goog-api-key": env.GEMINI_API_KEY,
+      },
+      body: JSON.stringify({
+        systemInstruction: system ? { parts: [{ text: system }] } : undefined,
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        generationConfig,
+      }),
+      signal: controller.signal,
+    });
+    const text = await response.text();
+    const parsed = parseGatewayBody(text);
+    if (!response.ok) {
+      return { ok: false, status: response.status, ms: Date.now() - started, body: parsed };
+    }
+    const output = extractGeminiText(parsed);
+    const body = responseMode === "json"
+      ? { model, json: parseJsonFromModel(output), raw: output, provider: "gemini" }
+      : responseMode === "summary"
+        ? { model, summary: output, provider: "gemini" }
+        : { model, response: output, provider: "gemini" };
+    if (prompt.includes("Daedalus LLM is working")) {
+      body.ok = true;
+      body.gateway = "cloudflare-worker-gemini";
+      body.providerReachable = true;
+      body.generated = true;
+      body.sample = output;
+    }
+    return { ok: true, status: 200, ms: Date.now() - started, body };
+  } catch (error) {
+    return {
+      ok: false,
+      status: error && error.name === "AbortError" ? 504 : 0,
+      ms: Date.now() - started,
+      body: { error: error && error.name === "AbortError" ? "Timeout" : "Gemini unreachable", detail: error && error.message ? error.message : String(error) },
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function extractGeminiText(data) {
+  if (!data || !Array.isArray(data.candidates)) return "";
+  return data.candidates
+    .flatMap((candidate) => candidate && candidate.content && Array.isArray(candidate.content.parts) ? candidate.content.parts : [])
+    .map((part) => typeof part.text === "string" ? part.text : "")
+    .join("")
+    .trim();
 }
 
 function diagnosticFromResult(result) {
