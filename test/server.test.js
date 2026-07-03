@@ -7,8 +7,18 @@ const { buildServer } = require('../src/server');
 
 const config = {
   apiKey: 'test-secret',
+  provider: 'ollama',
   ollamaBaseUrl: 'http://ollama.test',
   defaultModel: 'llama3.2:3b',
+};
+
+const geminiConfig = {
+  apiKey: 'test-secret',
+  provider: 'gemini',
+  ollamaBaseUrl: '',
+  geminiApiKey: 'gemini-secret',
+  geminiBaseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+  defaultModel: 'gemini-flash-latest',
 };
 
 function jsonResponse(body, status = 200) {
@@ -81,6 +91,8 @@ test('self-test calls configured Ollama URL using default model', async () => {
   assert.deepEqual(response.json(), {
     ok: true,
     gateway: 'daedalus-llm-gateway',
+    provider: 'ollama',
+    providerReachable: true,
     ollamaReachable: true,
     model: 'llama3.2:3b',
     generated: true,
@@ -108,6 +120,8 @@ test('self-test does not return secrets or public Ollama instructions on failure
   assert.equal(response.statusCode, 502);
   const body = response.json();
   assert.equal(body.ok, false);
+  assert.equal(body.provider, 'ollama');
+  assert.equal(body.providerReachable, false);
   assert.equal(body.ollamaReachable, false);
   assert.equal(body.model, 'llama3.2:3b');
 
@@ -211,6 +225,59 @@ test('summarise route allows a caller-provided system prompt', async () => {
 
   assert.equal(response.statusCode, 200);
   assert.equal(response.json().summary, 'I am doing well. How can I help?');
+});
+
+test('Gemini provider chat calls generateContent endpoint', async () => {
+  const fetchImpl = async (url, init) => {
+    assert.equal(url, 'https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent');
+    assert.equal(init.headers['X-goog-api-key'], 'gemini-secret');
+    const body = JSON.parse(init.body);
+    assert.equal(body.systemInstruction.parts[0].text, 'You are concise.');
+    assert.equal(body.contents[0].parts[0].text, 'Hello');
+    assert.equal(body.generationConfig.temperature, 0.7);
+    return jsonResponse({
+      candidates: [{ content: { parts: [{ text: 'Hi from Gemini.' }] } }],
+    });
+  };
+  const app = buildServer({ config: geminiConfig, fetchImpl, logger: false });
+
+  const response = await app.inject({
+    method: 'POST',
+    url: '/v1/chat',
+    headers: { 'x-daedalus-api-key': 'test-secret' },
+    payload: {
+      message: 'Hello',
+      system: 'You are concise.',
+      temperature: 0.7,
+    },
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().model, 'gemini-flash-latest');
+  assert.equal(response.json().response, 'Hi from Gemini.');
+});
+
+test('Gemini provider json route requests JSON mime type', async () => {
+  const fetchImpl = async (url, init) => {
+    assert.equal(url, 'https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent');
+    const body = JSON.parse(init.body);
+    assert.equal(body.generationConfig.responseMimeType, 'application/json');
+    assert.match(body.contents[0].parts[0].text, /Return only valid JSON/);
+    return jsonResponse({
+      candidates: [{ content: { parts: [{ text: '{"answer":42}' }] } }],
+    });
+  };
+  const app = buildServer({ config: geminiConfig, fetchImpl, logger: false });
+
+  const response = await app.inject({
+    method: 'POST',
+    url: '/v1/json',
+    headers: { 'x-daedalus-api-key': 'test-secret' },
+    payload: { prompt: 'Return the answer.' },
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(response.json().json, { answer: 42 });
 });
 
 test('depot notes route retrieves example formatting without leaking example content', async () => {

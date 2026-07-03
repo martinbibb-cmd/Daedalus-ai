@@ -1,7 +1,7 @@
 {
   "name": "daedalus-llm-gateway",
   "version": "1.0.0",
-  "description": "Fastify API gateway for private Ollama access on the Daedalus network.",
+  "description": "Fastify API gateway for Daedalus LLM provider access.",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
@@ -12,6 +12,7 @@
   },
   "keywords": [
     "fastify",
+    "gemini",
     "ollama",
     "llm",
     "gateway"

@@ -4,11 +4,13 @@ const path = require('node:path');
 const { extractJsonObject, generate, listModels } = require('./ollama');
 
 function sanitizeDiagnosticError(error, config) {
-  let message = error && error.message ? error.message : 'Ollama self-test failed';
+  let message = error && error.message ? error.message : 'LLM self-test failed';
 
   const redactions = [
     config.apiKey,
     config.ollamaBaseUrl,
+    config.geminiApiKey,
+    config.geminiBaseUrl,
     'api.openai.com',
   ].filter(Boolean);
 
@@ -36,6 +38,7 @@ function buildServer({ config, fetchImpl = fetch, logger = true }) {
   app.get('/health', async () => ({
     ok: true,
     service: 'daedalus-llm-gateway',
+    provider: config.provider || 'ollama',
     defaultModel: config.defaultModel,
   }));
 
@@ -55,12 +58,14 @@ function buildServer({ config, fetchImpl = fetch, logger = true }) {
 
       const sample = String(result.response || '').trim();
       if (!sample) {
-        throw new Error('Ollama returned an empty response');
+        throw new Error('LLM provider returned an empty response');
       }
 
       return {
         ok: true,
         gateway: 'daedalus-llm-gateway',
+        provider: config.provider || 'ollama',
+        providerReachable: true,
         ollamaReachable: true,
         model: result.model || config.defaultModel,
         generated: true,
@@ -69,6 +74,8 @@ function buildServer({ config, fetchImpl = fetch, logger = true }) {
     } catch (error) {
       return reply.code(502).send({
         ok: false,
+        provider: config.provider || 'ollama',
+        providerReachable: false,
         ollamaReachable: false,
         model: config.defaultModel,
         error: sanitizeDiagnosticError(error, config),

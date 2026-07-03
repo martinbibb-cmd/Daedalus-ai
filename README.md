@@ -195,8 +195,10 @@ Create `.env`:
 
 ```bash
 DAEDALUS_LLM_API_KEY=replace-with-a-long-random-secret
+LLM_PROVIDER=gemini
+GEMINI_API_KEY=replace-with-google-gemini-key
+DEFAULT_MODEL=gemini-flash-latest
 OLLAMA_BASE_URL=http://127.0.0.1:11434
-DEFAULT_MODEL=llama3.2:3b
 DEPOT_NOTES_EXAMPLES_DIR=/mnt/user/ai-support/depot-notes/examples
 HOST=0.0.0.0
 PORT=8787
@@ -205,8 +207,10 @@ PORT=8787
 Required environment variables:
 
 - `DAEDALUS_LLM_API_KEY`: shared API key required in `x-daedalus-api-key`
-- `OLLAMA_BASE_URL`: private Ollama base URL. Use `http://127.0.0.1:11434` when the gateway runs on the same host as Ollama.
-- `DEFAULT_MODEL`: default Ollama model, for example `llama3.2:3b`
+- `LLM_PROVIDER`: `gemini` or `ollama`
+- `GEMINI_API_KEY`: Google Gemini API key when `LLM_PROVIDER=gemini`
+- `DEFAULT_MODEL`: default model, for example `gemini-flash-latest`
+- `OLLAMA_BASE_URL`: private Ollama base URL, only required when `LLM_PROVIDER=ollama`
 
 ## Install and Run
 
