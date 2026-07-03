@@ -998,7 +998,23 @@ def no_relevant_manual_answer() -> dict[str, Any]:
     }
 
 
+def is_pricebook_query(query: str) -> bool:
+    lowered = query.lower()
+    return any(term in lowered for term in (
+        "price book",
+        "pricebook",
+        "price list",
+        "from the price",
+        "how much",
+        "cost",
+        "price",
+        "£",
+    ))
+
+
 def is_boiler_spec_question(query: str) -> bool:
+    if is_pricebook_query(query):
+        return False
     lowered = query.lower()
     return (
         requires_direct_fact_answer(query)
@@ -1033,6 +1049,71 @@ def manual_matches_boiler_domain(manual_id: str) -> bool:
     if looks_like_catalogue_text(combined) or looks_like_building_reg_text(combined):
         return False
     return any(term in combined.lower() for term in ("boiler", "greenstar", "worcester", "glowworm", "vaillant", "ideal", "baxi", "heating"))
+
+
+def manual_matches_catalogue_domain(manual_id: str) -> bool:
+    manual = get_manual_or_404(manual_id)
+    metadata = metadata_text(manual)
+    sample_text = ""
+    try:
+        sample_text = "\n".join(page.get("text", "") for page in load_pages(manual_id)[:5])
+    except Exception:
+        sample_text = ""
+    return looks_like_catalogue_text(f"{metadata}\n{sample_text}")
+
+
+def pricebook_search_terms(query: str) -> list[str]:
+    ignored = {
+        "from", "the", "price", "book", "pricebook", "list", "how", "much", "does",
+        "cost", "what", "with", "and", "for", "please", "show", "find",
+    }
+    return [term for term in tokenize(query) if term not in ignored]
+
+
+def pricebook_lines_from_page(text: str) -> list[str]:
+    lines = [clean_text(line) for line in text.splitlines() if clean_text(line)]
+    if len(lines) <= 1:
+        lines = re.split(r"(?=.+?£\s*\d)", clean_text(text))
+    return [clean_text(line) for line in lines if "£" in line]
+
+
+def answer_pricebook_query_from_pages(manual_id: str, page_numbers: list[int], question: str) -> dict[str, Any] | None:
+    terms = pricebook_search_terms(question)
+    if not terms:
+        return None
+    pages = [page for page in load_pages(manual_id) if int(page.get("page", 0)) in set(page_numbers)]
+    matches: list[dict[str, Any]] = []
+    for page in pages:
+        page_number = int(page["page"])
+        for line in pricebook_lines_from_page(page.get("text", "")):
+            lowered = line.lower()
+            if all(term in lowered for term in terms[:3]) or any(term in lowered for term in terms):
+                if re.search(r"£\s*\d", line):
+                    matches.append({
+                        "manual_id": manual_id,
+                        "page": page_number,
+                        "snippet": line[:500],
+                        "description": line[:500],
+                        "type": "pricebook-row",
+                        "confidence": "high",
+                        "asset_url": public_page_image_path(manual_id, page_number),
+                        "thumbnail_url": public_page_image_path(manual_id, page_number),
+                        "generated": False,
+                    })
+    if not matches:
+        return None
+    selected = matches[:4]
+    pages_used = sorted({item["page"] for item in selected})
+    return {
+        "answer": "\n".join(item["snippet"] for item in selected),
+        "manual_id": manual_id,
+        "citations": [{"page": page, "label": f"Page {page}"} for page in pages_used],
+        "confidence": "high",
+        "evidence": selected,
+        "visual_assets": [{"page": page, "url": public_page_image_path(manual_id, page), "thumbnail_url": public_page_image_path(manual_id, page)} for page in pages_used],
+        "deterministic": True,
+        "source": "pricebook-page-reader",
+    }
 
 
 def query_terms(query: str) -> list[str]:
@@ -2045,6 +2126,21 @@ def query_all_manuals(request: QueryRequest) -> dict[str, Any]:
     evidence = search_pages(request.question, manual_id=None, limit=request.limit)
     if not evidence:
         return direct_fact_missing_answer(None) if requires_direct_fact_answer(request.question) else no_relevant_manual_answer()
+
+    if is_pricebook_query(request.question):
+        catalogue_evidence = [item for item in evidence if item.get("manual_id") and manual_matches_catalogue_domain(item["manual_id"])]
+        checked_catalogues: set[str] = set()
+        for item in catalogue_evidence:
+            manual_id = item.get("manual_id")
+            if not manual_id or manual_id in checked_catalogues:
+                continue
+            checked_catalogues.add(manual_id)
+            page_numbers = candidate_page_numbers([candidate for candidate in catalogue_evidence if candidate.get("manual_id") == manual_id])
+            price_answer = answer_pricebook_query_from_pages(manual_id, page_numbers, request.question)
+            if price_answer:
+                return price_answer
+        if catalogue_evidence:
+            return no_relevant_manual_answer()
 
     rejected_documents: list[dict[str, Any]] = []
     if is_boiler_spec_question(request.question):

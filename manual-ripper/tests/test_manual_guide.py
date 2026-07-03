@@ -135,12 +135,13 @@ def seed_pricebook_with_boiler_models(manual_id="pricebook-32cdi"):
             "page": 5,
             "text": (
                 "Part Price (inc VAT) Lead Time Category. Greenstar 32CDi Compact Regular Boiler £1,894.00. "
-                "Greenstar 15Ri Regular Boiler £1,336.00. Other Packs. Price book."
+                "Greenstar 15Ri Regular Boiler £1,336.00. Auto bypass valve £42.00. Other Packs. Price book."
             ),
             "layout_blocks": [],
             "tables": [
                 {"type": "table-row", "text": "Greenstar 32CDi Compact Regular Boiler £1,894.00 Lead Time Category"},
                 {"type": "table-row", "text": "Greenstar 15Ri Regular Boiler £1,336.00 Lead Time Category"},
+                {"type": "table-row", "text": "Auto bypass valve £42.00"},
             ],
             "key_values": [],
             "assets": {"thumbnail_url": f"/manuals/{manual_id}/assets/page-5-thumb.png"},
@@ -793,6 +794,21 @@ def test_metadata_inference_classifies_pricebook_before_model_names():
     metadata = main.infer_metadata("worcester-pricebook.pdf", pages)
 
     assert metadata == {"manufacturer": None, "model": None, "appliance_type": "catalogue"}
+
+
+def test_pricebook_query_reads_catalogue_page_not_boiler_spec_path(tmp_path, monkeypatch):
+    configure_storage(tmp_path, monkeypatch)
+    seed_pricebook_with_boiler_models()
+    client = TestClient(main.app)
+
+    response = client.post("/manuals/query", json={"question": "From the price book how much is an auto bypass?", "limit": 6})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["source"] == "pricebook-page-reader"
+    assert "Auto bypass valve £42.00" in body["answer"]
+    assert "Best matching manual text" not in body["answer"]
+    assert body["evidence"][0]["type"] == "pricebook-row"
 
 
 def test_terminal_clearance_opening_answers_from_matching_table_row(tmp_path, monkeypatch):

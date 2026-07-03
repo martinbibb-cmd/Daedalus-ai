@@ -39,6 +39,9 @@ test('public welcome page is served at root', async () => {
   assert.equal(response.status, 200);
   assert.match(html, /The Hitchhiker's Guide to Boilers/);
   assert.match(html, /DON'T PANIC/);
+  assert.match(html, /background: #050505/);
+  assert.match(html, /color: #d71920/);
+  assert.match(html, /#f6c453/);
   assert.match(html, /href="\/chat"/);
 });
 

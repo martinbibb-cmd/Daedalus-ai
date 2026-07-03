@@ -18,7 +18,7 @@ const WELCOME_PAGE = `<!doctype html>
   <title>The Hitchhiker's Guide to Boilers</title>
   <style>
     :root {
-      color-scheme: light dark;
+      color-scheme: dark;
       font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
 
@@ -27,8 +27,8 @@ const WELCOME_PAGE = `<!doctype html>
       min-height: 100dvh;
       display: grid;
       place-items: center;
-      background: #f6f1df;
-      color: #1f2933;
+      background: #050505;
+      color: #f6c453;
     }
 
     main {
@@ -43,14 +43,16 @@ const WELCOME_PAGE = `<!doctype html>
       font-size: clamp(38px, 9vw, 82px);
       line-height: 0.95;
       letter-spacing: 0;
+      color: #f6c453;
     }
 
     .panic {
       margin: 0;
-      color: #0f766e;
+      color: #d71920;
       font-size: clamp(42px, 12vw, 110px);
       font-weight: 900;
       letter-spacing: 0;
+      text-shadow: 0 0 18px rgba(215, 25, 32, 0.45);
     }
 
     .links {
@@ -65,22 +67,15 @@ const WELCOME_PAGE = `<!doctype html>
       min-width: 132px;
       padding: 14px 24px;
       border-radius: 8px;
-      background: #17202a;
-      color: #ffffff;
+      background: #f6c453;
+      color: #050505;
       text-decoration: none;
       font-weight: 800;
     }
 
-    @media (prefers-color-scheme: dark) {
-      body {
-        background: #141813;
-        color: #f4f1df;
-      }
-
-      a {
-        background: #f4f1df;
-        color: #141813;
-      }
+    a:hover {
+      background: #d71920;
+      color: #ffffff;
     }
   </style>
 </head>
@@ -104,7 +99,7 @@ const PUBLIC_CHAT_PAGE = `<!doctype html>
   <title>Boiler Guide Chat</title>
   <style>
     :root {
-      color-scheme: light dark;
+      color-scheme: dark;
       font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       line-height: 1.5;
     }
@@ -112,8 +107,8 @@ const PUBLIC_CHAT_PAGE = `<!doctype html>
     body {
       margin: 0;
       min-height: 100dvh;
-      background: #eef3f1;
-      color: #17202a;
+      background: #050505;
+      color: #f6c453;
     }
 
     main {
@@ -124,14 +119,15 @@ const PUBLIC_CHAT_PAGE = `<!doctype html>
 
     header {
       padding: 16px max(16px, calc((100vw - 920px) / 2));
-      background: #ffffff;
-      border-bottom: 1px solid #d7dedb;
+      background: #050505;
+      border-bottom: 1px solid #6f5215;
     }
 
     h1 {
       margin: 0;
       font-size: 22px;
       letter-spacing: 0;
+      color: #f6c453;
     }
 
     .messages {
@@ -148,26 +144,29 @@ const PUBLIC_CHAT_PAGE = `<!doctype html>
       display: grid;
       gap: 10px;
       padding: 14px;
-      border: 1px solid #d7dedb;
+      border: 1px solid #6f5215;
       border-radius: 8px;
-      background: #ffffff;
+      background: #101010;
       white-space: pre-wrap;
       overflow-wrap: anywhere;
     }
 
     .message.user {
       justify-self: end;
-      background: #dff3ee;
-      border-color: #9bd5c9;
+      background: #281111;
+      border-color: #d71920;
+      color: #ffffff;
     }
 
     .message.assistant {
       justify-self: start;
+      background: #101010;
+      color: #f8f0d0;
     }
 
     .meta,
     .citations {
-      color: #627083;
+      color: #d6b75a;
       font-size: 13px;
     }
 
@@ -179,7 +178,7 @@ const PUBLIC_CHAT_PAGE = `<!doctype html>
     }
 
     .citations a {
-      color: #146c5c;
+      color: #f6c453;
       font-weight: 750;
     }
 
@@ -188,9 +187,9 @@ const PUBLIC_CHAT_PAGE = `<!doctype html>
       display: grid;
       gap: 6px;
       padding: 8px;
-      border: 1px solid #d7dedb;
+      border: 1px solid #6f5215;
       border-radius: 8px;
-      background: #f8faf9;
+      background: #050505;
       color: inherit;
       text-decoration: none;
       font-size: 12px;
@@ -200,9 +199,9 @@ const PUBLIC_CHAT_PAGE = `<!doctype html>
       width: 100%;
       aspect-ratio: 4 / 3;
       object-fit: contain;
-      border: 1px solid #d7dedb;
+      border: 1px solid #6f5215;
       border-radius: 6px;
-      background: #ffffff;
+      background: #0a0a0a;
     }
 
     form {
@@ -214,8 +213,8 @@ const PUBLIC_CHAT_PAGE = `<!doctype html>
       grid-template-columns: minmax(0, 1fr) auto;
       gap: 10px;
       padding: 14px max(16px, calc((100vw - 920px) / 2));
-      background: rgba(255, 255, 255, 0.96);
-      border-top: 1px solid #d7dedb;
+      background: rgba(5, 5, 5, 0.96);
+      border-top: 1px solid #6f5215;
     }
 
     textarea {
@@ -223,11 +222,11 @@ const PUBLIC_CHAT_PAGE = `<!doctype html>
       max-height: 140px;
       resize: vertical;
       padding: 12px;
-      border: 1px solid #b9c5c0;
+      border: 1px solid #6f5215;
       border-radius: 8px;
       font: inherit;
-      background: #ffffff;
-      color: inherit;
+      background: #101010;
+      color: #f8f0d0;
     }
 
     button {
@@ -235,8 +234,8 @@ const PUBLIC_CHAT_PAGE = `<!doctype html>
       padding: 0 20px;
       border: 0;
       border-radius: 8px;
-      background: #146c5c;
-      color: #ffffff;
+      background: #f6c453;
+      color: #050505;
       font: inherit;
       font-weight: 800;
       cursor: pointer;
@@ -247,29 +246,9 @@ const PUBLIC_CHAT_PAGE = `<!doctype html>
       opacity: 0.65;
     }
 
-    @media (prefers-color-scheme: dark) {
-      body {
-        background: #10151b;
-        color: #edf2f7;
-      }
-
-      header,
-      .message,
-      form,
-      textarea {
-        background: #171d25;
-        border-color: #344052;
-      }
-
-      .message.user {
-        background: #123b35;
-        border-color: #1c665b;
-      }
-
-      .evidence-card {
-        background: #10151b;
-        border-color: #344052;
-      }
+    button:hover {
+      background: #d71920;
+      color: #ffffff;
     }
   </style>
 </head>
