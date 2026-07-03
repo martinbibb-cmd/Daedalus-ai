@@ -181,9 +181,45 @@ def get_manual_or_404(manual_id: str) -> dict[str, Any]:
     return row_to_manual(row)
 
 
+def looks_like_catalogue_text(text: str) -> bool:
+    lowered = text.lower()
+    catalogue_hits = sum(1 for term in (
+        "price book",
+        "pricebook",
+        "price list",
+        "lead time category",
+        "part price",
+        "other packs",
+        "pack price",
+        "inc vat",
+        "ex vat",
+        "time category",
+    ) if term in lowered)
+    money_hits = len(re.findall(r"£\s*\d+", text))
+    return catalogue_hits >= 1 or money_hits >= 4
+
+
+def looks_like_building_reg_text(text: str) -> bool:
+    lowered = text.lower()
+    return "approved document" in lowered and "building regulations" in lowered
+
+
 def infer_metadata(filename: str, pages: list[dict[str, Any]]) -> dict[str, str | None]:
     text = "\n".join(page["text"] for page in pages[:3])[:5000]
     haystack = f"{filename}\n{text}".lower()
+
+    if looks_like_catalogue_text(f"{filename}\n{text}"):
+        return {
+            "manufacturer": None,
+            "model": None,
+            "appliance_type": "catalogue",
+        }
+    if looks_like_building_reg_text(f"{filename}\n{text}"):
+        return {
+            "manufacturer": "HM Government",
+            "model": "Approved Document",
+            "appliance_type": "building-regulation",
+        }
 
     manufacturer = None
     for candidate in ("worcester", "vaillant", "baxi", "ideal", "viessmann", "glow-worm", "alpha", "potterton"):
@@ -986,9 +1022,17 @@ def is_boiler_spec_question(query: str) -> bool:
 def manual_matches_boiler_domain(manual_id: str) -> bool:
     manual = get_manual_or_404(manual_id)
     metadata = metadata_text(manual)
-    if any(term in metadata for term in ("price", "catalog", "catalogue", "pack", "shower", "building-regulation", "approved document")):
+    sample_text = ""
+    try:
+        sample_text = "\n".join(page.get("text", "") for page in load_pages(manual_id)[:5])
+    except Exception:
+        sample_text = ""
+    combined = f"{metadata}\n{sample_text}"
+    if any(term in metadata for term in ("price", "catalog", "catalogue", "pricebook", "price-book", "pack", "shower", "building-regulation", "approved document")):
         return False
-    return any(term in metadata for term in ("boiler", "greenstar", "worcester", "glowworm", "vaillant", "ideal", "baxi", "heating"))
+    if looks_like_catalogue_text(combined) or looks_like_building_reg_text(combined):
+        return False
+    return any(term in combined.lower() for term in ("boiler", "greenstar", "worcester", "glowworm", "vaillant", "ideal", "baxi", "heating"))
 
 
 def query_terms(query: str) -> list[str]:
@@ -1084,6 +1128,16 @@ def confidence_for_score(score: int) -> str:
 
 
 def display_manual_name(manual: dict[str, Any]) -> str:
+    if manual.get("appliance_type") in {"catalogue", "pricebook", "price-book", "building-regulation"}:
+        return manual["filename"]
+    manual_id = manual.get("id")
+    if manual_id:
+        try:
+            sample = "\n".join(page.get("text", "") for page in load_pages(str(manual_id))[:3])
+            if looks_like_catalogue_text(f"{manual.get('filename', '')}\n{sample}") or looks_like_building_reg_text(sample):
+                return manual["filename"]
+        except Exception:
+            pass
     parts = [manual.get("manufacturer"), manual.get("model")]
     name = " ".join(part for part in parts if part)
     return name or manual["filename"]

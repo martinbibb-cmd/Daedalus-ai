@@ -129,6 +129,44 @@ def seed_unrelated_manual(manual_id="shower-pack"):
     return manual_id
 
 
+def seed_pricebook_with_boiler_models(manual_id="pricebook-32cdi"):
+    pages = [
+        {
+            "page": 5,
+            "text": (
+                "Part Price (inc VAT) Lead Time Category. Greenstar 32CDi Compact Regular Boiler £1,894.00. "
+                "Greenstar 15Ri Regular Boiler £1,336.00. Other Packs. Price book."
+            ),
+            "layout_blocks": [],
+            "tables": [
+                {"type": "table-row", "text": "Greenstar 32CDi Compact Regular Boiler £1,894.00 Lead Time Category"},
+                {"type": "table-row", "text": "Greenstar 15Ri Regular Boiler £1,336.00 Lead Time Category"},
+            ],
+            "key_values": [],
+            "assets": {"thumbnail_url": f"/manuals/{manual_id}/assets/page-5-thumb.png"},
+        },
+    ]
+    main.extracted_path(manual_id).write_text(json.dumps({"manual_id": manual_id, "pages": pages}), encoding="utf-8")
+    with sqlite3.connect(main.DB_PATH) as conn:
+        conn.execute(
+            """
+            INSERT INTO manuals (id, filename, manufacturer, model, appliance_type, uploaded_at, page_count, extraction_status, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
+            """,
+            (
+                manual_id,
+                "depot-pricebook.pdf",
+                "Worcester",
+                "Greenstar 32CDi",
+                "boiler",
+                datetime.now(timezone.utc).isoformat(),
+                1,
+                "complete",
+            ),
+        )
+    return manual_id
+
+
 def seed_part_l_manual(manual_id="part-l"):
     pages = [
         {
@@ -726,6 +764,35 @@ def test_boiler_spec_question_rejects_catalogue_and_building_reg_documents(tmp_p
     assert body["answer"] == main.MISSING_EXACT_FACT_ANSWER
     assert body["evidence"] == []
     assert body["citations"] == []
+
+
+def test_pricebook_containing_32cdi_is_not_treated_as_boiler_manual(tmp_path, monkeypatch):
+    configure_storage(tmp_path, monkeypatch)
+    manual_id = seed_pricebook_with_boiler_models()
+
+    assert main.manual_matches_boiler_domain(manual_id) is False
+    assert main.display_manual_name(main.get_manual_or_404(manual_id)) == "depot-pricebook.pdf"
+
+    client = TestClient(main.app)
+    response = client.post("/manuals/query", json={"question": "What is the lift weight of the 32CDi?", "limit": 6})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["answer"] == main.MISSING_EXACT_FACT_ANSWER
+    assert body["evidence"] == []
+    assert "Greenstar 32CDi" not in body["answer"]
+    assert "Lead Time Category" not in body["answer"]
+
+
+def test_metadata_inference_classifies_pricebook_before_model_names():
+    pages = [{
+        "page": 1,
+        "text": "Price book. Part Price (inc VAT). Greenstar 32CDi Compact Regular Boiler £1,894.00. Lead Time Category.",
+    }]
+
+    metadata = main.infer_metadata("worcester-pricebook.pdf", pages)
+
+    assert metadata == {"manufacturer": None, "model": None, "appliance_type": "catalogue"}
 
 
 def test_terminal_clearance_opening_answers_from_matching_table_row(tmp_path, monkeypatch):
