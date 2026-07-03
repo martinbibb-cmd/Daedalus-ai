@@ -1174,6 +1174,10 @@ def pricebook_search_terms(query: str) -> list[str]:
     return [term for term in tokenize(query) if term not in ignored]
 
 
+def contains_price_amount(text: str) -> bool:
+    return ("\u00a3" in text or "\u00c2\u00a3" in text) and bool(re.search(r"\d", text))
+
+
 def pricebook_lines_from_page(text: str) -> list[str]:
     lines = [clean_text(line) for line in text.splitlines() if clean_text(line)]
     if len(lines) <= 1:
@@ -1196,7 +1200,13 @@ def answer_pricebook_query_from_pages(manual_id: str, page_numbers: list[int], q
     matches: list[dict[str, Any]] = []
     for page in pages:
         page_number = int(page["page"])
-        for line in pricebook_lines_from_page(page.get("text", "")):
+        candidate_lines = pricebook_lines_from_page(page.get("text", ""))
+        candidate_lines.extend(
+            clean_text(str(table.get("text") or ""))
+            for table in page.get("tables", [])
+            if "£" in str(table.get("text") or "") or "Â£" in str(table.get("text") or "")
+        )
+        for line in candidate_lines:
             lowered = line.lower()
             if all(term in lowered for term in terms[:3]) or any(term in lowered for term in terms):
                 if re.search(r"£\s*\d", line):
@@ -1211,6 +1221,65 @@ def answer_pricebook_query_from_pages(manual_id: str, page_numbers: list[int], q
                         "thumbnail_url": public_page_image_path(manual_id, page_number),
                         "generated": False,
                     })
+                    continue
+                if re.search(r"£\s*\d", line):
+                    matches.append({
+                        "manual_id": manual_id,
+                        "page": page_number,
+                        "snippet": line[:500],
+                        "description": line[:500],
+                        "type": "pricebook-row",
+                        "confidence": "high",
+                        "asset_url": public_page_image_path(manual_id, page_number),
+                        "thumbnail_url": public_page_image_path(manual_id, page_number),
+                        "generated": False,
+                    })
+    if not matches:
+        return None
+    selected = matches[:4]
+    pages_used = sorted({item["page"] for item in selected})
+    return {
+        "answer": "\n".join(item["snippet"] for item in selected),
+        "manual_id": manual_id,
+        "citations": [{"page": page, "label": f"Page {page}"} for page in pages_used],
+        "confidence": "high",
+        "evidence": selected,
+        "visual_assets": [{"page": page, "url": public_page_image_path(manual_id, page), "thumbnail_url": public_page_image_path(manual_id, page)} for page in pages_used],
+        "deterministic": True,
+        "source": "pricebook-page-reader",
+    }
+
+
+def answer_pricebook_query_from_pages(manual_id: str, page_numbers: list[int], question: str) -> dict[str, Any] | None:
+    terms = pricebook_search_terms(question)
+    if not terms:
+        return None
+    pages = [page for page in load_pages(manual_id) if int(page.get("page", 0)) in set(page_numbers)]
+    matches: list[dict[str, Any]] = []
+    for page in pages:
+        page_number = int(page["page"])
+        candidate_lines = pricebook_lines_from_page(page.get("text", ""))
+        candidate_lines.extend(
+            clean_text(str(table.get("text") or ""))
+            for table in page.get("tables", [])
+            if contains_price_amount(str(table.get("text") or ""))
+        )
+        for line in dict.fromkeys(candidate_lines):
+            lowered = line.lower()
+            if not contains_price_amount(line):
+                continue
+            if all(term in lowered for term in terms[:3]) or any(term in lowered for term in terms):
+                matches.append({
+                    "manual_id": manual_id,
+                    "page": page_number,
+                    "snippet": line[:500],
+                    "description": line[:500],
+                    "type": "pricebook-row",
+                    "confidence": "high",
+                    "asset_url": public_page_image_path(manual_id, page_number),
+                    "thumbnail_url": public_page_image_path(manual_id, page_number),
+                    "generated": False,
+                })
     if not matches:
         return None
     selected = matches[:4]
