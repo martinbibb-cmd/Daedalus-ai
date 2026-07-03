@@ -19,7 +19,7 @@ from pydantic import BaseModel
 APP_VERSION = "manual-ripper-0.4-guide"
 EVIDENCE_SCHEMA_VERSION = "evidence-store-v3"
 MISSING_EXACT_FACT_ANSWER = "I don’t have that exact fact extracted yet."
-DIRECT_FACT_INTENTS = {"dimensions", "weight", "max_flue_length", "terminal_clearance"}
+DIRECT_FACT_INTENTS = {"dimensions", "weight", "max_flue_length", "terminal_clearance", "boiler_type"}
 MAX_UPLOAD_BYTES = int(os.getenv("MANUAL_RIPPER_MAX_UPLOAD_BYTES", str(30 * 1024 * 1024)))
 AI_SUPPORT_ROOT_ENV = os.getenv("AI_SUPPORT_ROOT")
 AI_SUPPORT_ROOT = Path(AI_SUPPORT_ROOT_ENV or "/srv/daedalus")
@@ -471,6 +471,8 @@ def evidence_object(
 
 def classify_question_intent(question: str) -> str:
     lowered = question.lower()
+    if "type" in lowered and any(term in lowered for term in ("boiler", "appliance", "ri", "cdi", "greenstar")):
+        return "boiler_type"
     if any(term in lowered for term in ("weight", "heavy", "weigh", "lift weight", "appliance weight")):
         return "weight"
     if any(term in lowered for term in ("fault code", "fault codes", "error code", "diagnostic code")):
@@ -803,6 +805,60 @@ def build_weight_evidence(manual: dict[str, Any], pages: list[dict[str, Any]]) -
     return objects
 
 
+def build_boiler_type_evidence(manual: dict[str, Any], pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    objects: list[dict[str, Any]] = []
+    patterns = [
+        ("regular_boiler", "regular boiler", r"\b(?:gas[- ]fired\s+)?regular\s+boiler\b"),
+        ("heat_only_boiler", "heat-only boiler", r"\bheat[- ]only\s+boiler\b"),
+        ("system_boiler", "system boiler", r"\bsystem\s+boiler\b"),
+        ("combi_boiler", "combi boiler", r"\b(?:combi|combination)\s+boiler\b"),
+        ("open_vent_boiler", "open-vent boiler", r"\bopen[- ]vent(?:ed)?\s+boiler\b"),
+    ]
+    seen: set[tuple[str, int]] = set()
+    for page in pages:
+        text = clean_text(page.get("text", ""))
+        page_number = int(page["page"])
+        for field, value, pattern in patterns:
+            match = re.search(pattern, text, re.I)
+            if not match or (field, page_number) in seen:
+                continue
+            seen.add((field, page_number))
+            snippet = text[max(0, match.start() - 120): min(len(text), match.end() + 120)]
+            objects.append(evidence_object(
+                manual,
+                category="boiler_type",
+                field=field,
+                value=value,
+                unit="type",
+                source_page=page_number,
+                source_type="text",
+                confidence="high",
+                validation_status="validated",
+                evidence_text=snippet,
+            ))
+    if objects:
+        return objects
+    if manual.get("appliance_type") == "boiler" and manual.get("model"):
+        for page in pages[:3]:
+            text = clean_text(page.get("text", ""))
+            if "boiler" not in text.lower():
+                continue
+            page_number = int(page["page"])
+            return [evidence_object(
+                manual,
+                category="boiler_type",
+                field="boiler",
+                value="boiler",
+                unit="type",
+                source_page=page_number,
+                source_type="text",
+                confidence="medium",
+                validation_status="validated",
+                evidence_text=text[:500],
+            )]
+    return []
+
+
 def structured_fact(item: dict[str, Any]) -> dict[str, Any]:
     fact = {
         "type": item.get("type") or item.get("category"),
@@ -875,7 +931,8 @@ def build_evidence_index(manual_id: str, pages: list[dict[str, Any]] | None = No
     page_data = pages if pages is not None else load_pages(manual_id)
     table_facts = build_table_fact_evidence(manual, page_data)
     weight_facts = build_weight_evidence(manual, page_data)
-    evidence = build_dimension_evidence(manual, page_data) + table_facts + weight_facts
+    boiler_type_facts = build_boiler_type_evidence(manual, page_data)
+    evidence = build_dimension_evidence(manual, page_data) + table_facts + weight_facts + boiler_type_facts
     index = {
         "manual_id": manual_id,
         "manual": display_manual_name(manual),
@@ -883,7 +940,7 @@ def build_evidence_index(manual_id: str, pages: list[dict[str, Any]] | None = No
         "variant": manual.get("model"),
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "schema_version": EVIDENCE_SCHEMA_VERSION,
-        "facts": [structured_fact(item) for item in table_facts + weight_facts],
+        "facts": [structured_fact(item) for item in table_facts + weight_facts + boiler_type_facts],
         "evidence": evidence,
         "source_policy": {
             "generated_images_as_source": False,
@@ -926,7 +983,7 @@ def build_verified_page_facts(manual_id: str, page_numbers: list[int] | None = N
         page for page in load_pages(manual_id)
         if not wanted or int(page.get("page", 0)) in wanted
     ]
-    return build_dimension_evidence(manual, pages) + build_table_fact_evidence(manual, pages) + build_weight_evidence(manual, pages)
+    return build_dimension_evidence(manual, pages) + build_table_fact_evidence(manual, pages) + build_weight_evidence(manual, pages) + build_boiler_type_evidence(manual, pages)
 
 
 def facts_for_category(manual_id: str, category: str, facts: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
@@ -1699,6 +1756,30 @@ def answer_weight_from_facts(manual_id: str, question: str, facts_override: list
     )
 
 
+def answer_boiler_type_from_facts(manual_id: str, question: str, facts_override: list[dict[str, Any]] | None = None, debug: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    facts = [
+        item for item in facts_for_category(manual_id, "boiler_type", facts_override)
+        if item.get("validation_status") == "validated"
+    ]
+    if not facts:
+        return None
+    priority = ["regular_boiler", "heat_only_boiler", "system_boiler", "combi_boiler", "open_vent_boiler", "boiler"]
+    selected = None
+    for field in priority:
+        selected = next((item for item in facts if item.get("field") == field), None)
+        if selected:
+            break
+    selected = selected or facts[0]
+    return direct_fact_response(
+        manual_id,
+        f"Boiler type: {selected['value']}",
+        [selected],
+        "typed-boiler-type-facts",
+        confidence=selected.get("confidence") or "high",
+        debug=debug,
+    )
+
+
 def no_structured_fact_answer(manual_id: str, intent: str) -> dict[str, Any]:
     return direct_fact_missing_answer(manual_id)
 
@@ -1737,6 +1818,8 @@ def answer_from_evidence_store(manual_id: str, question: str, facts_override: li
         return answer_flue_length_from_facts(manual_id, question, facts_override, debug) or no_structured_fact_answer(manual_id, intent)
     if intent == "weight":
         return answer_weight_from_facts(manual_id, question, facts_override, debug) or no_structured_fact_answer(manual_id, intent)
+    if intent == "boiler_type":
+        return answer_boiler_type_from_facts(manual_id, question, facts_override, debug) or no_structured_fact_answer(manual_id, intent)
 
     dimension_requested = is_dimension_question(question) or any(term in lowered for term in ("where did that come from", "open the diagram", "show me the page"))
     if not dimension_requested:

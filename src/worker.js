@@ -27,7 +27,10 @@ const WELCOME_PAGE = `<!doctype html>
       min-height: 100dvh;
       display: grid;
       place-items: center;
-      background: #050505;
+      background:
+        radial-gradient(circle at 50% 22%, rgba(246, 196, 83, 0.10), transparent 28%),
+        radial-gradient(circle at 20% 80%, rgba(255, 255, 255, 0.06), transparent 18%),
+        #050505;
       color: #f6c453;
     }
 
@@ -49,10 +52,17 @@ const WELCOME_PAGE = `<!doctype html>
     .panic {
       margin: 0;
       color: #d71920;
-      font-size: clamp(42px, 12vw, 110px);
+      font-family: Impact, Haettenschweiler, "Arial Black", sans-serif;
+      font-size: clamp(62px, 16vw, 154px);
       font-weight: 900;
       letter-spacing: 0;
-      text-shadow: 0 0 18px rgba(215, 25, 32, 0.45);
+      line-height: 0.82;
+      -webkit-text-stroke: clamp(2px, 0.6vw, 7px) #f6c453;
+      text-shadow:
+        0 2px 0 #8c5a12,
+        0 5px 0 #4f2608,
+        0 10px 22px rgba(0, 0, 0, 0.85),
+        0 0 22px rgba(246, 196, 83, 0.28);
     }
 
     .links {

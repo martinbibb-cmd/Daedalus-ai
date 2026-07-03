@@ -54,7 +54,7 @@ def seed_manual(manual_id="greenstar-ri"):
         {
             "page": 12,
             "text": (
-                "Greenstar Ri ErP technical data. Appliance dimensions H x W x D "
+                "Greenstar Ri ErP regular boiler technical data. Appliance dimensions H x W x D "
                 "600 mm x 390 mm x 270 mm. Lift weight 27.4 kg. "
                 "Packaged appliance weight 31 kg. Overall dimensions are listed in millimetres."
             ),
@@ -717,6 +717,24 @@ def test_global_ri_width_query_uses_matching_boiler_manual_not_unrelated_docs(tm
     assert "building regulations" not in body["answer"].lower()
     assert "Best matching manual text" not in body["answer"]
     assert "Match count" not in body["answer"]
+
+
+def test_global_ri_boiler_type_answers_from_page_fact(tmp_path, monkeypatch):
+    configure_storage(tmp_path, monkeypatch)
+    seed_manual("greenstar-ri")
+    seed_unrelated_manual("shower-pack")
+    client = TestClient(main.app)
+
+    response = client.post("/manuals/query", json={"question": "What type of boiler is the Ri?", "limit": 6})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["manual_id"] == "greenstar-ri"
+    assert body["source"] == "typed-boiler-type-facts"
+    assert body["answer"] == "Boiler type: regular boiler"
+    assert body["citations"] == [{"page": 12, "label": "Page 12"}]
+    assert body["evidence"][0]["category"] == "boiler_type"
+    assert "Best matching manual text" not in body["answer"]
 
 
 def test_global_specific_ri_query_rejects_unrelated_global_results(tmp_path, monkeypatch):
