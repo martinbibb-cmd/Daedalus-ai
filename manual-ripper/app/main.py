@@ -1004,6 +1004,25 @@ def candidate_page_numbers(evidence: list[dict[str, Any]]) -> list[int]:
     return list(dict.fromkeys(int(item["page"]) for item in evidence if item.get("page")))
 
 
+def filter_candidate_pages_for_intent(manual_id: str, page_numbers: list[int], question: str) -> list[int]:
+    intent = classify_question_intent(question)
+    if intent != "terminal_clearance" or not page_numbers:
+        return page_numbers
+    wanted = set(page_numbers)
+    filtered: list[int] = []
+    for page in load_pages(manual_id):
+        page_number = int(page.get("page", 0))
+        if page_number not in wanted:
+            continue
+        text = clean_text(" ".join([
+            page.get("text", ""),
+            " ".join(str(table.get("text") or "") for table in page.get("tables", [])),
+        ])).lower()
+        if "terminal" in text and any(term in text for term in ("clearance", "opening", "openable", "window", "vent", "corner", "change of fabric")):
+            filtered.append(page_number)
+    return filtered or page_numbers
+
+
 def build_verified_page_facts(manual_id: str, page_numbers: list[int] | None = None) -> list[dict[str, Any]]:
     manual = get_manual_or_404(manual_id)
     wanted = set(page_numbers or [])
@@ -1160,6 +1179,13 @@ def pricebook_lines_from_page(text: str) -> list[str]:
     if len(lines) <= 1:
         lines = re.split(r"(?=.+?£\s*\d)", clean_text(text))
     return [clean_text(line) for line in lines if "£" in line]
+
+
+def pricebook_lines_from_page(text: str) -> list[str]:
+    lines = [clean_text(line) for line in text.splitlines() if clean_text(line)]
+    if len(lines) <= 1:
+        lines = re.split(r"(?=.+?(?:£|Â£)\s*\d)", clean_text(text))
+    return [clean_text(line) for line in lines if "£" in line or "Â£" in line]
 
 
 def answer_pricebook_query_from_pages(manual_id: str, page_numbers: list[int], question: str) -> dict[str, Any] | None:
@@ -2204,7 +2230,7 @@ def query_manual(manual_id: str, request: QueryRequest) -> dict[str, Any]:
         }
     if requires_direct_fact_answer(request.question):
         locator_evidence = search_pages(request.question, manual_id=manual_id, limit=request.limit)
-        page_numbers = candidate_page_numbers(locator_evidence)
+        page_numbers = filter_candidate_pages_for_intent(manual_id, candidate_page_numbers(locator_evidence), request.question)
         if not page_numbers:
             return direct_fact_missing_answer(manual_id)
         deterministic = deterministic_answer(manual_id, request.question, page_numbers=page_numbers)
@@ -2311,7 +2337,11 @@ def query_all_manuals(request: QueryRequest) -> dict[str, Any]:
         if not manual_id or manual_id in checked_manuals:
             continue
         checked_manuals.add(manual_id)
-        manual_pages = candidate_page_numbers([candidate for candidate in evidence if candidate.get("manual_id") == manual_id])
+        manual_pages = filter_candidate_pages_for_intent(
+            manual_id,
+            candidate_page_numbers([candidate for candidate in evidence if candidate.get("manual_id") == manual_id]),
+            request.question,
+        )
         lower_ranked_rejections = [
             {
                 "manual_id": candidate.get("manual_id"),
