@@ -1470,7 +1470,12 @@ const DEV_PAGE = `<!doctype html>
       if (data.response !== undefined) {
         return typeof data.response === "string" ? data.response : pretty(data.response);
       }
-      if (data.error) return data.error;
+      if (data.error) {
+        const error = typeof data.error === "string" ? data.error : pretty(data.error);
+        const detail = data.detail ? "\n" + (typeof data.detail === "string" ? data.detail : pretty(data.detail)) : "";
+        const safeBody = data.safeBody ? "\n\nUpstream body:\n" + pretty(data.safeBody) : "";
+        return error + detail + safeBody;
+      }
       return pretty(data);
     }
 
@@ -2932,6 +2937,7 @@ function classifyGatewayError(result) {
   if (kind === "auth_failed") return "Authentication failed";
   if (result.status === 0) return "Gateway unreachable";
   if (result.status === 401 || result.status === 403) return "Authentication failed";
+  if (result.status === 429) return "Gemini rate limit or quota exceeded";
   if (result.status === 404) return "Endpoint or model unavailable";
   if (result.status === 408 || result.status === 504) return "Timeout";
   if (result.body && result.body.error) return String(result.body.error);

@@ -217,6 +217,35 @@ test('depot notes generation can call Gemini directly from Worker', async () => 
   }
 });
 
+test('Gemini 429 errors are surfaced as quota diagnostics', async () => {
+  const originalFetch = global.fetch;
+  global.fetch = async () => new Response(
+    JSON.stringify({ error: { code: 429, message: 'Resource exhausted', status: 'RESOURCE_EXHAUSTED' } }),
+    { status: 429, headers: { 'content-type': 'application/json' } },
+  );
+
+  try {
+    const response = await handleRequest(
+      new Request('https://example.test/chat', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ message: 'What is a llama?', mode: 'chat' }),
+      }),
+      {
+        GEMINI_API_KEY: 'gemini-key',
+        DAEDALUS_LLM_MODEL: 'gemini-flash-latest',
+      },
+    );
+    const body = await response.json();
+
+    assert.equal(response.status, 429);
+    assert.equal(body.error, 'Gemini rate limit or quota exceeded');
+    assert.equal(body.safeBody.error.status, 'RESOURCE_EXHAUSTED');
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
 test('depot notes generation falls back to json endpoint for older gateways', async () => {
   const originalFetch = global.fetch;
   const calledPaths = [];
