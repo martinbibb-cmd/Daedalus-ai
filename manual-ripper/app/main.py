@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import hashlib
 import json
 import os
@@ -7,7 +9,7 @@ import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import fitz
 import requests
@@ -95,7 +97,7 @@ class QueryRequest(BaseModel):
 
 class SearchRequest(BaseModel):
     query: str
-    manual_id: str | None = None
+    manual_id: Optional[str] = None
     limit: int = 10
 
 
@@ -998,6 +1000,123 @@ def load_evidence_index(manual_id: str) -> dict[str, Any]:
 def evidence_for_category(manual_id: str, category: str) -> list[dict[str, Any]]:
     index = load_evidence_index(manual_id)
     return [item for item in index.get("evidence", []) if item.get("category") == category]
+
+
+def numeric_fact_value(item: dict[str, Any]) -> float | None:
+    value = item.get("value")
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def capture_stock_type(manual: dict[str, Any]) -> str | None:
+    appliance_type = str(manual.get("appliance_type") or "").lower()
+    filename = str(manual.get("filename") or "").lower()
+    haystack = f"{appliance_type} {filename}"
+    if "boiler" in haystack:
+        return "boiler"
+    if "cylinder" in haystack:
+        return "cylinder"
+    if "air condition" in haystack or "air-conditioning" in haystack or " ac" in f" {haystack} ":
+        return "ac"
+    return None
+
+
+def capture_stock_clearance_defaults(stock_type: str) -> dict[str, float] | None:
+    if stock_type == "boiler":
+        return {
+            "sideMm": 5,
+            "aboveMm": 170,
+            "belowMm": 200,
+            "frontMm": 600,
+        }
+    return None
+
+
+def build_capture_stock_entry(manual: dict[str, Any]) -> dict[str, Any] | None:
+    stock_type = capture_stock_type(manual)
+    if not stock_type:
+        return None
+
+    dimensions = {
+        item.get("field"): item
+        for item in evidence_for_category(manual["id"], "dimensions")
+        if item.get("validation_status") == "validated"
+        and item.get("field") in {"height", "width", "depth"}
+        and item.get("unit") == "mm"
+        and numeric_fact_value(item) is not None
+    }
+    if not {"height", "width", "depth"}.issubset(dimensions):
+        return None
+
+    width = numeric_fact_value(dimensions["width"])
+    height = numeric_fact_value(dimensions["height"])
+    depth = numeric_fact_value(dimensions["depth"])
+    if width is None or height is None or depth is None:
+        return None
+
+    source_pages = sorted({
+        int(item["source_page"])
+        for item in dimensions.values()
+        if item.get("source_page") is not None
+    })
+    manufacturer = manual.get("manufacturer") or "Unknown"
+    model = manual.get("model") or Path(str(manual.get("filename") or "manual")).stem
+    item_id = re.sub(r"[^a-z0-9]+", "-", f"{stock_type}-{manufacturer}-{model}".lower()).strip("-")
+    source_page_label = ",".join(str(page) for page in source_pages) if source_pages else "unknown"
+
+    entry: dict[str, Any] = {
+        "id": item_id,
+        "applianceType": stock_type,
+        "make": manufacturer,
+        "model": model,
+        "primitive": "cuboid",
+        "dimensions": {
+            "cuboid": {
+                "widthMm": width,
+                "heightMm": height,
+                "depthMm": depth,
+            }
+        },
+        "clearanceMm": capture_stock_clearance_defaults(stock_type),
+        "manualSource": f"manual-ripper:{manual['id']}:pages:{source_page_label}",
+        "manualProvenance": {
+            "manualId": manual["id"],
+            "filename": manual.get("filename"),
+            "sourcePages": source_pages,
+            "facts": [
+                {
+                    "field": field,
+                    "value": numeric_fact_value(item),
+                    "unit": item.get("unit"),
+                    "sourcePage": item.get("source_page"),
+                    "sourceType": item.get("source_type"),
+                    "confidence": item.get("confidence"),
+                    "validationStatus": item.get("validation_status"),
+                    "evidenceText": item.get("evidence_text"),
+                }
+                for field, item in sorted(dimensions.items())
+            ],
+            "status": "manual-derived",
+        },
+    }
+    return entry
+
+
+def build_capture_van_stock_catalog() -> list[dict[str, Any]]:
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM manuals WHERE notes IS NULL ORDER BY manufacturer, model, filename"
+        ).fetchall()
+    entries = [
+        entry
+        for row in rows
+        if (entry := build_capture_stock_entry(row_to_manual(row))) is not None
+    ]
+    return entries
 
 
 def candidate_page_numbers(evidence: list[dict[str, Any]]) -> list[int]:
@@ -2204,6 +2323,11 @@ def manuals() -> dict[str, Any]:
     with db() as conn:
         rows = conn.execute("SELECT * FROM manuals ORDER BY uploaded_at DESC").fetchall()
     return {"manuals": [row_to_manual(row) for row in rows]}
+
+
+@app.get("/manuals/van-stock-catalog.json")
+def capture_van_stock_catalog() -> list[dict[str, Any]]:
+    return build_capture_van_stock_catalog()
 
 
 @app.post("/manuals/upload")

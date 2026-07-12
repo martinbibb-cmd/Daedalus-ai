@@ -959,3 +959,50 @@ def test_max_flue_length_with_90_elbows_uses_flue_facts_not_clearance_table(tmp_
     assert "300 mm" not in body["answer"]
     assert "150 mm" not in body["answer"]
     assert "Best matching manual text" not in body["answer"]
+
+
+def test_capture_van_stock_catalog_exports_validated_manual_dimensions(tmp_path, monkeypatch):
+    configure_storage(tmp_path, monkeypatch)
+    manual_id = seed_manual("greenstar-ri")
+    client = TestClient(main.app)
+
+    response = client.get("/manuals/van-stock-catalog.json")
+
+    assert response.status_code == 200
+    items = response.json()
+    assert len(items) == 1
+    item = items[0]
+    assert item["id"] == "boiler-worcester-greenstar-ri-erp"
+    assert item["applianceType"] == "boiler"
+    assert item["make"] == "Worcester"
+    assert item["model"] == "Greenstar Ri ErP"
+    assert item["primitive"] == "cuboid"
+    assert item["dimensions"] == {
+        "cuboid": {
+            "widthMm": 390.0,
+            "heightMm": 600.0,
+            "depthMm": 270.0,
+        }
+    }
+    assert item["clearanceMm"] == {
+        "sideMm": 5,
+        "aboveMm": 170,
+        "belowMm": 200,
+        "frontMm": 600,
+    }
+    assert item["manualSource"] == f"manual-ripper:{manual_id}:pages:12"
+    assert item["manualProvenance"]["manualId"] == manual_id
+    assert item["manualProvenance"]["status"] == "manual-derived"
+    assert {fact["field"] for fact in item["manualProvenance"]["facts"]} == {"height", "width", "depth"}
+    assert all(fact["validationStatus"] == "validated" for fact in item["manualProvenance"]["facts"])
+
+
+def test_capture_van_stock_catalog_omits_manuals_without_validated_dimensions(tmp_path, monkeypatch):
+    configure_storage(tmp_path, monkeypatch)
+    seed_manual_with_visual_case_dimensions_only()
+    client = TestClient(main.app)
+
+    response = client.get("/manuals/van-stock-catalog.json")
+
+    assert response.status_code == 200
+    assert response.json() == []
