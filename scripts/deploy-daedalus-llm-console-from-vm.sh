@@ -32,9 +32,9 @@ else
 fi
 
 echo "Worker health:"
-curl -fsS https://petllama.martinbibb.workers.dev/health
+curl -fsS https://daedalus-llm-console.martinbibb.workers.dev/health
 printf '\n'
 
 echo "Depot Notes diagnostic:"
-curl -fsS https://petllama.martinbibb.workers.dev/depot-notes/debug
+curl -fsS https://daedalus-llm-console.martinbibb.workers.dev/depot-notes/debug
 printf '\n'

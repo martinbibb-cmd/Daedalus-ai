@@ -53,7 +53,7 @@ MANUAL_RIPPER_EXTRACTED_DIR=/srv/daedalus/manuals/extracted
 MANUAL_RIPPER_FACTS_DIR=/srv/daedalus/manuals/facts
 MANUAL_RIPPER_INDEXES_DIR=/srv/daedalus/manuals/indexes
 MANUAL_RIPPER_ASSETS_DIR=/srv/daedalus/manuals/assets
-DAEDALUS_LLM_GATEWAY_URL=https://ai.atlas-phm.uk
+DAEDALUS_LLM_GATEWAY_URL=<DAEDALUS_LLM_GATEWAY_URL>
 DAEDALUS_LLM_API_KEY=replace-with-secret
 DAEDALUS_LLM_MODEL=llama3.2:3b
 HOST=127.0.0.1
@@ -110,7 +110,7 @@ Expose port `8791` only on the LAN or through a controlled Cloudflare Tunnel rou
 Point the Worker at the NAS-hosted service:
 
 ```toml
-MANUAL_RIPPER_BASE_URL = "https://manuals.atlas-phm.uk"
+MANUAL_RIPPER_BASE_URL = "https://your-private-manual-ripper.example"
 ```
 
 If using a direct LAN URL for testing:

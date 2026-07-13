@@ -6,16 +6,16 @@ Fastify API gateway for private Daedalus LLM provider access.
 
 Apps should call this gateway only. Do not expose provider credentials publicly.
 
-## Pet Llama v0.2 Engineering Console
+## Daedalus LLM Console
 
-`petllama` is a Cloudflare Worker UI for testing the Daedalus gateway from a browser without exposing gateway secrets. It is an engineering console, not a ChatGPT clone.
+`daedalus-llm-console` is a Cloudflare Worker UI for testing the Daedalus gateway from a browser without exposing gateway secrets. It is an engineering console, not a ChatGPT clone.
 
 Architecture:
 
 ```text
-Browser petllama UI
-  -> POST /chat on the petllama Worker
-  -> Daedalus LLM gateway at https://ai.atlas-phm.uk
+Browser Daedalus LLM Console
+  -> POST /chat on the Daedalus LLM Console Worker
+  -> Daedalus LLM gateway at <DAEDALUS_LLM_GATEWAY_URL>
   -> private LLM provider backend
 ```
 
@@ -54,7 +54,7 @@ Training changes model weights. Manual Ripper keeps the model unchanged and inst
 Architecture:
 
 ```text
-Pet Llama Worker
+Daedalus LLM Console Worker
   -> Manual Ripper service on the Daedalus VM
   -> /srv/daedalus/manuals local storage
   -> Daedalus LLM Gateway
@@ -104,7 +104,7 @@ MANUAL_RIPPER_FACTS_DIR=/srv/daedalus/manuals/facts
 MANUAL_RIPPER_INDEXES_DIR=/srv/daedalus/manuals/indexes
 MANUAL_RIPPER_ASSETS_DIR=/srv/daedalus/manuals/assets
 AI_REGRESSIONS_DIR=/srv/daedalus/regressions
-DAEDALUS_LLM_GATEWAY_URL=https://ai.atlas-phm.uk
+DAEDALUS_LLM_GATEWAY_URL=<DAEDALUS_LLM_GATEWAY_URL>
 DAEDALUS_LLM_API_KEY=replace-with-secret
 DAEDALUS_LLM_MODEL=gemini-flash-latest
 HOST=127.0.0.1
@@ -122,7 +122,7 @@ sudo systemctl enable --now daedalus-manual-ripper
 Worker configuration:
 
 ```toml
-MANUAL_RIPPER_BASE_URL = "https://manuals.atlas-phm.uk"
+MANUAL_RIPPER_BASE_URL = "https://your-private-manual-ripper.example"
 ```
 
 Expose Manual Ripper privately, preferably through Cloudflare Tunnel or another controlled private route. Do not expose it as an unauthenticated public internet service.
@@ -147,13 +147,16 @@ Required Cloudflare secret:
 
 ```bash
 npx wrangler secret put DAEDALUS_LLM_API_KEY
+npx wrangler secret put DAEDALUS_LLM_GATEWAY_URL
+npx wrangler secret put MANUAL_RIPPER_BASE_URL
 ```
 
-Do not commit `DAEDALUS_LLM_API_KEY` to the repo. Non-secret Worker vars are set in `wrangler.toml`:
+Do not commit `DAEDALUS_LLM_API_KEY`, private gateway URLs, or private Manual Ripper URLs to the repo. Worker environment values are set in Cloudflare, not committed to the repo:
 
 ```toml
-DAEDALUS_LLM_GATEWAY_URL = "https://ai.atlas-phm.uk"
+DAEDALUS_LLM_GATEWAY_URL = "https://your-private-daedalus-gateway.example"
 DAEDALUS_LLM_MODEL = "gemini-flash-latest"
+MANUAL_RIPPER_BASE_URL = "https://your-private-manual-ripper.example"
 ```
 
 Manual deploy flow:
@@ -182,7 +185,7 @@ Preferred Daedalus VM deploy flow:
 
 ```bash
 cd /home/martin/Daedalus-ai
-bash scripts/deploy-petllama-from-vm.sh
+bash scripts/deploy-daedalus-llm-console-from-vm.sh
 ```
 
 The helper fast-forwards `main`, runs tests, deploys the Worker, restarts Manual Ripper when the systemd service exists, and prints health plus Depot Notes diagnostics. It requires `CLOUDFLARE_API_TOKEN` to be set in the VM shell.

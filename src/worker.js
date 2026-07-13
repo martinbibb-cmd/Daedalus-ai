@@ -2988,7 +2988,7 @@ function payloadForMode({ mode, message, model, temperature, schema }) {
       model,
       message,
       temperature,
-      system: "You are petllama, a direct conversational assistant for gateway testing.",
+      system: "You are daedalus-llm-console, a direct conversational assistant for gateway testing.",
     };
   }
 
@@ -3032,7 +3032,7 @@ function chatFallbackPayload({ message, model, temperature }) {
     text: message,
     maxWords: 140,
     temperature,
-    system: "You are petllama, a direct conversational assistant. You are not summarising text unless explicitly asked.",
+    system: "You are daedalus-llm-console, a direct conversational assistant. You are not summarising text unless explicitly asked.",
     instruction: [
       "Treat the text below as a chat message from the user.",
       "Reply naturally and directly.",
