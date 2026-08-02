@@ -15,7 +15,7 @@ RestartSec=5
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
-ReadWritePaths=/srv/daedalus/manuals /mnt/user/ai-support
+ReadWritePaths=/srv/daedalus/manuals
 
 [Install]
 WantedBy=multi-user.target
