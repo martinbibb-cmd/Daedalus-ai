@@ -1,0 +1,173 @@
+import json
+import tempfile
+import unittest
+from pathlib import Path
+
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "bin"))
+
+import manual_catalogue_ripper as ripper
+import promote_reviewed_catalogue as promoter
+
+
+class ManualCatalogueRipperTests(unittest.TestCase):
+    def test_builds_candidate_with_dimensions_clearances_and_provenance(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manual = root / "Greenstar_9-24_Ri_Installation_and_Servicing_Instructions.txt"
+            manual.write_text(
+                "\n".join(
+                    [
+                        "Worcester Bosch Greenstar Ri ErP+ 9-24 Installation and Servicing Instructions",
+                        "Appliance dimensions H x W x D 600 mm x 390 mm x 270 mm.",
+                        "Minimum side clearance 5 mm.",
+                        "Above clearance 170 mm.",
+                        "Below clearance 200 mm.",
+                        "Front clearance 600 mm.",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            output = root / "manual-derived-van-stock.candidates.json"
+            report = root / "manual-ripper-report.json"
+
+            self.assertEqual(ripper.run(root, output, report), 0)
+
+            entries = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(len(entries), 1)
+            entry = entries[0]
+            self.assertEqual(entry["make"], "Worcester Bosch")
+            self.assertEqual(entry["model"], "Greenstar Ri ErP+ 9-24")
+            self.assertEqual(
+                entry["dimensions"]["cuboid"],
+                {"widthMm": 390, "heightMm": 600, "depthMm": 270},
+            )
+            self.assertEqual(
+                entry["clearanceMm"],
+                {"sideMm": 5, "aboveMm": 170, "belowMm": 200, "frontMm": 600},
+            )
+            self.assertEqual(entry["reviewStatus"], "candidate")
+            self.assertTrue(entry["reviewRequired"])
+            self.assertTrue(all(item["evidenceClass"] == "manual_evidence" for item in entry["provenance"]))
+
+    def test_does_not_create_stock_entry_when_dimensions_are_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manual = root / "boiler.txt"
+            manual.write_text("Worcester Bosch Greenstar Ri manual. Above clearance 170 mm.", encoding="utf-8")
+
+            output = root / "candidates.json"
+            report = root / "report.json"
+
+            self.assertEqual(ripper.run(root, output, report), 0)
+            self.assertEqual(json.loads(output.read_text(encoding="utf-8")), [])
+            report_json = json.loads(report.read_text(encoding="utf-8"))
+            self.assertIn("missing_dimensions:height,width,depth", report_json["reports"][0]["reviewReasons"])
+
+    def test_prefers_filename_manufacturer_over_cross_brand_mentions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manual = root / "Ideal System Boiler Quick Reference Guide.txt"
+            manual.write_text(
+                "\n".join(
+                    [
+                        "Ideal Logic System 24kW",
+                        "Dimensions: H-700mm W-395mm D-278mm.",
+                        "Competitor comparison includes Worcester Bosch and Vaillant.",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            output = root / "candidates.json"
+            report = root / "report.json"
+
+            self.assertEqual(ripper.run(root, output, report), 0)
+            report_json = json.loads(report.read_text(encoding="utf-8"))
+            self.assertEqual(report_json["reports"][0]["make"], "Ideal")
+            self.assertNotEqual(report_json["reports"][0]["make"], "Worcester Bosch")
+
+    def test_ambiguous_multi_brand_document_does_not_invent_manufacturer(self):
+        self.assertIsNone(
+            ripper.find_make(
+                "This comparison covers Worcester Bosch, Ideal and Vaillant boilers.",
+                "boiler-comparison.txt",
+            )
+        )
+
+    def test_greenstar_model_family_can_resolve_worcester_make(self):
+        text = "\n".join(
+            [
+                "Greenstar Ri ErP+ 9-24 Installation and Servicing Instructions",
+                "Worcester Bosch appears in the manual footer.",
+                "Ideal appears in a standards or comparison note.",
+            ]
+        )
+
+        model = ripper.find_model(text, "Greenstar_9-24_Ri_Installation_and_Servicing_Instructions.txt")
+        self.assertEqual(model, "Greenstar Ri ErP+ 9-24")
+        self.assertIsNone(ripper.find_make(text, "Greenstar_9-24_Ri_Installation_and_Servicing_Instructions.txt"))
+        self.assertEqual(ripper.infer_make_from_model_family(model, text), "Worcester Bosch")
+
+    def test_promotes_reviewed_candidate_to_capture_catalogue_shape(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            candidates = root / "candidates.json"
+            output = root / "manual-derived-van-stock.json"
+            approval = root / "approval.json"
+            candidates.write_text(
+                json.dumps(
+                    [
+                        {
+                            "id": "boiler-worcester-bosch-greenstar-ri-erp-plus-9-24",
+                            "applianceType": "boiler",
+                            "make": "Worcester Bosch",
+                            "model": "Greenstar Ri ErP+ 9-24",
+                            "primitive": "cuboid",
+                            "dimensions": {"cuboid": {"widthMm": 390, "heightMm": 600, "depthMm": 270}},
+                            "clearanceMm": {"sideMm": 5, "aboveMm": 170, "belowMm": 200, "frontMm": 600},
+                            "manualSource": "manual.pdf; dimensions p7; clearances p20,p32",
+                            "reviewStatus": "candidate",
+                            "provenance": [{"field": "width", "value": 390}],
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            self.assertEqual(
+                promoter.promote(candidates, output, approval, "unit-test-reviewer"),
+                0,
+            )
+
+            promoted = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(len(promoted), 1)
+            self.assertNotIn("provenance", promoted[0])
+            self.assertNotIn("reviewStatus", promoted[0])
+            self.assertEqual(promoted[0]["clearanceMm"]["frontMm"], 600)
+            approval_record = json.loads(approval.read_text(encoding="utf-8"))
+            self.assertEqual(approval_record["promotedEntries"], 1)
+
+    def test_deduplicates_candidates_and_prefers_real_manual_sources(self):
+        synthetic = {
+            "id": "boiler-worcester-bosch-greenstar-ri-erp-plus-9-24",
+            "manualSource": "worcester-greenstar-ri-synthetic-manual.txt",
+            "provenance": [{"field": "width", "sourcePage": None}],
+        }
+        real = {
+            "id": "boiler-worcester-bosch-greenstar-ri-erp-plus-9-24",
+            "manualSource": "Greenstar_9-24_Ri_Installation_and_Servicing_Instructions.pdf; dimensions p7",
+            "provenance": [{"field": "width", "sourcePage": 7}],
+        }
+
+        entries, duplicates = ripper.deduplicate_entries([synthetic, real])
+
+        self.assertEqual(duplicates, ["boiler-worcester-bosch-greenstar-ri-erp-plus-9-24"])
+        self.assertEqual(len(entries), 1)
+        self.assertIn(".pdf", entries[0]["manualSource"])
+
+
+if __name__ == "__main__":
+    unittest.main()

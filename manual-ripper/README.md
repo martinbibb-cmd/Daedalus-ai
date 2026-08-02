@@ -1,8 +1,13 @@
 # Manual Ripper
 
-Service for boiler/heating manual ingestion and evidence-backed question answering. It can run on the VM or as a NAS/Unraid container.
+Service for Daedalus manual ingestion and evidence-backed question answering. It can run on the VM or as a NAS/Unraid container.
 
 This is RAG, not model training. PDFs are stored on the configured manual storage path, extracted page by page, and answered from structured evidence/facts.
+
+The current catalogue extraction lane focuses on boiler/manual-derived van stock
+because those are the first reviewed manuals available. The service boundary is
+broader: manuals are supporting evidence for the whole Place Twin, not a
+heating-only product surface.
 
 ## Storage
 
@@ -78,6 +83,55 @@ uvicorn app.main:app --host 127.0.0.1 --port 8791
 - `POST /manuals/{id}/extract`
 - `POST /manuals/{id}/query`
 - `POST /manuals/search`
+
+## Offline catalogue extraction
+
+The lab also includes a deterministic batch pipeline for turning reviewed
+manual text into Capture van-stock catalogue candidates. This is deliberately
+not LLM extraction and does not auto-promote technical truth.
+
+Input:
+
+- PDF, text or Markdown manuals under a controlled inbox such as
+  `/srv/daedalus/manuals/inbox`.
+- PDFs require `pdftotext` from `poppler-utils`.
+
+Candidate output:
+
+```text
+manual-derived-van-stock.candidates.json
+manual-ripper-report.json
+```
+
+Reviewed output for Capture:
+
+```text
+manual-derived-van-stock.json
+manual-derived-van-stock.approval.json
+```
+
+Run the deterministic candidate extractor:
+
+```bash
+python3 bin/manual_catalogue_ripper.py \
+  --input /srv/daedalus/manuals/inbox \
+  --output /srv/daedalus/manuals/output/manual-derived-van-stock.candidates.json \
+  --report /srv/daedalus/manuals/output/manual-ripper-report.json
+```
+
+Promote only after human review:
+
+```bash
+python3 bin/promote_reviewed_catalogue.py \
+  --candidates /srv/daedalus/manuals/output/manual-derived-van-stock.candidates.json \
+  --output /srv/daedalus/manuals/reviewed/manual-derived-van-stock.json \
+  --approval /srv/daedalus/manuals/reviewed/manual-derived-van-stock.approval.json \
+  --approved-by "reviewer name"
+```
+
+The promoted catalogue shape matches Capture's bundled van-stock fixture and
+must remain reviewable back to manual evidence. Unreviewed candidates are not
+authoritative stock data.
 
 ## systemd
 
