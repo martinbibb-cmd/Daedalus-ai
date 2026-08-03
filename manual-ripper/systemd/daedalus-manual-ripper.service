@@ -12,6 +12,7 @@ EnvironmentFile=/etc/daedalus-manual-ripper.env
 ExecStart=/srv/daedalus/manual-ripper/.venv/bin/uvicorn app.main:app --host ${HOST} --port ${PORT}
 Restart=on-failure
 RestartSec=5
+UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
