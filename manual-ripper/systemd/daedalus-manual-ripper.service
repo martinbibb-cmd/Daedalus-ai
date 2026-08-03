@@ -7,15 +7,22 @@ Wants=network-online.target
 Type=simple
 User=manual-ripper
 Group=manual-ripper
-WorkingDirectory=/opt/daedalus-ai/manual-ripper
+WorkingDirectory=/srv/daedalus/manual-ripper
 EnvironmentFile=/etc/daedalus-manual-ripper.env
-ExecStart=/opt/daedalus-ai/manual-ripper/.venv/bin/uvicorn app.main:app --host ${HOST} --port ${PORT}
+ExecStart=/srv/daedalus/manual-ripper/.venv/bin/uvicorn app.main:app --host ${HOST} --port ${PORT}
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
 PrivateTmp=true
-ProtectSystem=full
-ReadWritePaths=/srv/daedalus/manuals
+ProtectSystem=strict
+ProtectHome=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ReadWritePaths=/srv/daedalus/manuals /srv/daedalus/regressions
 
 [Install]
 WantedBy=multi-user.target

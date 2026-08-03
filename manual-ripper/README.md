@@ -1,6 +1,6 @@
 # Manual Ripper
 
-Service for Daedalus manual ingestion and evidence-backed question answering. It can run on the VM or as a NAS/Unraid container.
+Service for Daedalus manual ingestion and evidence-backed question answering. The canonical Xeon runtime is on `daedalus-dev` (Tailscale `100.90.15.43`), not `daedalus-llm`. It can also run as a NAS/Unraid container.
 
 This is RAG, not model training. PDFs are stored on the configured manual storage path, extracted page by page, and answered from structured evidence/facts.
 
@@ -41,6 +41,16 @@ DEPOT_NOTES_EXAMPLES_DIR=/mnt/user/ai-support/depot-notes/examples
 
 ## Install
 
+Canonical Xeon layout:
+
+```text
+/srv/daedalus/apps/Daedalus-ai/manual-ripper  # Git source
+/srv/daedalus/manual-ripper                   # installed runtime
+/srv/daedalus/manuals                         # mutable manual storage
+/srv/daedalus/regressions                     # deterministic regression data
+/etc/daedalus-manual-ripper.env               # root-owned, mode 0600
+```
+
 ```bash
 cd manual-ripper
 python3 -m venv .venv
@@ -58,14 +68,11 @@ MANUAL_RIPPER_EXTRACTED_DIR=/srv/daedalus/manuals/extracted
 MANUAL_RIPPER_FACTS_DIR=/srv/daedalus/manuals/facts
 MANUAL_RIPPER_INDEXES_DIR=/srv/daedalus/manuals/indexes
 MANUAL_RIPPER_ASSETS_DIR=/srv/daedalus/manuals/assets
-DAEDALUS_LLM_GATEWAY_URL=<DAEDALUS_LLM_GATEWAY_URL>
-DAEDALUS_LLM_API_KEY=replace-with-secret
-DAEDALUS_LLM_MODEL=llama3.2:3b
 HOST=127.0.0.1
 PORT=8791
 ```
 
-Do not commit real keys.
+The safe default omits all gateway and external API variables. Do not add real keys unless a separate approved change explicitly enables evidence-backed answer generation. Deterministic extraction does not need them.
 
 ## Run
 
@@ -142,7 +149,7 @@ sudo systemctl enable --now daedalus-manual-ripper
 sudo systemctl status daedalus-manual-ripper
 ```
 
-Keep the service private, ideally behind Cloudflare Tunnel or local network access.
+Keep the Xeon service bound to `127.0.0.1`. Reach it only through a private SSH/Tailscale hop; do not add a public tunnel or listener.
 
 ## Unraid / NAS Container
 
