@@ -140,6 +140,30 @@ The promoted catalogue shape matches Capture's bundled van-stock fixture and
 must remain reviewable back to manual evidence. Unreviewed candidates are not
 authoritative stock data.
 
+### Publish finalized results to NAS
+
+The Xeon keeps SQLite, indexes and working files locally. After review, publish
+only finalized outputs and their provenance to the NAS-backed immutable results
+tree:
+
+```bash
+python3 bin/publish_reviewed_results.py
+```
+
+The command requires the reviewed catalogue and approval metadata, verifies the
+NAS mount, writes checksums and source-commit provenance, and finalizes a new
+UTC-named directory under:
+
+```text
+/mnt/daedalus-nas/Manuals/Results/manual-ripper/
+```
+
+It does not publish raw manuals, SQLite working state, indexes, credentials or
+temporary files, and it never overwrites an earlier published run. Published
+files are root-owned through the restricted NAS SSH identity and world-readable
+but not world-writable, so Martin can inspect them while the immutable archive
+cannot be edited through the normal NAS user account.
+
 ## systemd
 
 ```bash
