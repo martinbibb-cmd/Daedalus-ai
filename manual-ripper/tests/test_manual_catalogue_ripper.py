@@ -1,5 +1,6 @@
 import json
 import shutil
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -16,6 +17,43 @@ import promote_reviewed_catalogue as promoter
 
 
 class ManualCatalogueRipperTests(unittest.TestCase):
+    def test_uses_original_filename_from_metadata_for_uuid_named_manuals(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manual_id = "6a088cff-853f-4a76-8f01-be24c778b00a"
+            manual = root / f"{manual_id}.txt"
+            manual.write_text(
+                "\n".join(
+                    [
+                        "Worcester Bosch installation instructions for open vented boilers.",
+                        "Appliance dimensions H x W x D 600 mm x 390 mm x 270 mm.",
+                        "Minimum side clearance 5 mm.",
+                        "Above clearance 170 mm.",
+                        "Below clearance 200 mm.",
+                        "Front clearance 600 mm.",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            metadata_db = root / "metadata.sqlite"
+            with sqlite3.connect(metadata_db) as connection:
+                connection.execute("CREATE TABLE manuals (id TEXT, filename TEXT)")
+                connection.execute(
+                    "INSERT INTO manuals (id, filename) VALUES (?, ?)",
+                    (
+                        manual_id,
+                        "Greenstar_9-24_Ri_Installation_and_Servicing_Instructions.pdf",
+                    ),
+                )
+
+            output = root / "candidates.json"
+            report = root / "report.json"
+            self.assertEqual(ripper.run(root, output, report, metadata_db), 0)
+
+            entries = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(entries[0]["model"], "Greenstar Ri ErP+ 9-24")
+            self.assertIn("Greenstar_9-24_Ri", entries[0]["manualSource"])
+
     def test_reads_pdf_with_existing_pymupdf_when_pdftotext_is_absent(self):
         with tempfile.TemporaryDirectory() as tmp:
             manual = Path(tmp) / "manual.pdf"

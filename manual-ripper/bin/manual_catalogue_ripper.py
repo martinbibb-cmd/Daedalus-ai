@@ -5,6 +5,7 @@ import argparse
 import json
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -338,16 +339,17 @@ def build_manual_source(source_file: str, dimensions: dict[str, Evidence], clear
     return f"{source_file}; " + "; ".join(pages) if pages else source_file
 
 
-def parse_manual(path: Path) -> tuple[dict | None, dict]:
+def parse_manual(path: Path, source_filename: str | None = None) -> tuple[dict | None, dict]:
+    logical_filename = source_filename or path.name
     pages = read_manual(path)
     combined_text = "\n".join(text for _, text in pages)
-    model = find_model(combined_text, path.name)
-    make = find_make(combined_text, path.name) or infer_make_from_model_family(model, combined_text)
+    model = find_model(combined_text, logical_filename)
+    make = find_make(combined_text, logical_filename) or infer_make_from_model_family(model, combined_text)
     dimension_evidence: list[Evidence] = []
     clearance_evidence: list[Evidence] = []
     for page, text in pages:
-        dimension_evidence.extend(extract_dimensions(text, path.name, page))
-        clearance_evidence.extend(extract_clearances(text, path.name, page))
+        dimension_evidence.extend(extract_dimensions(text, logical_filename, page))
+        clearance_evidence.extend(extract_clearances(text, logical_filename, page))
 
     dimensions = first_by_field(dimension_evidence)
     clearances = first_by_field(clearance_evidence)
@@ -368,6 +370,7 @@ def parse_manual(path: Path) -> tuple[dict | None, dict]:
 
     report = {
         "sourceFile": str(path),
+        "sourceFilename": logical_filename,
         "make": make,
         "model": model,
         "pagesRead": len(pages),
@@ -399,7 +402,7 @@ def parse_manual(path: Path) -> tuple[dict | None, dict]:
             }
         },
         "clearanceMm": clearance_mm,
-        "manualSource": build_manual_source(path.name, dimensions, clearances),
+        "manualSource": build_manual_source(logical_filename, dimensions, clearances),
         "reviewStatus": "candidate",
         "extractionStatus": status,
         "reviewRequired": True,
@@ -442,13 +445,27 @@ def deduplicate_entries(entries: list[dict]) -> tuple[list[dict], list[str]]:
     return [selected[key] for key in sorted(selected)], sorted(duplicates)
 
 
-def run(input_dir: Path, output: Path, report_path: Path) -> int:
+def load_source_filename_map(metadata_db: Path | None) -> dict[str, str]:
+    if metadata_db is None or not metadata_db.exists():
+        return {}
+    with sqlite3.connect(metadata_db) as connection:
+        rows = connection.execute("SELECT id, filename FROM manuals").fetchall()
+    return {str(manual_id): str(filename) for manual_id, filename in rows}
+
+
+def run(
+    input_dir: Path,
+    output: Path,
+    report_path: Path,
+    metadata_db: Path | None = None,
+) -> int:
     entries = []
     reports = []
     errors = []
+    source_filenames = load_source_filename_map(metadata_db)
     for manual in discover_manuals(input_dir):
         try:
-            entry, report = parse_manual(manual)
+            entry, report = parse_manual(manual, source_filenames.get(manual.stem))
             reports.append(report)
             if entry:
                 entries.append(entry)
@@ -485,11 +502,16 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--input", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--report", required=True, type=Path)
+    parser.add_argument(
+        "--metadata-db",
+        type=Path,
+        help="Optional manual-ripper SQLite database used to restore original upload filenames.",
+    )
     args = parser.parse_args(argv)
     if not args.input.exists():
         print(f"input path does not exist: {args.input}", file=sys.stderr)
         return 2
-    return run(args.input, args.output, args.report)
+    return run(args.input, args.output, args.report, args.metadata_db)
 
 
 if __name__ == "__main__":
