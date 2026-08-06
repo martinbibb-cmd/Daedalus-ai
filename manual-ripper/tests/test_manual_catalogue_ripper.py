@@ -36,6 +36,8 @@ class ManualCatalogueRipperTests(unittest.TestCase):
         self.assertIn("INSERT INTO manual_catalogue_candidates", sql)
         self.assertNotIn("INSERT OR REPLACE", sql)
         self.assertIn("AND NOT EXISTS", sql)
+        self.assertNotIn("BEGIN TRANSACTION", sql)
+        self.assertNotIn("COMMIT", sql)
         self.assertIn("manual-candidate:xeon:boiler-vaillant-ecofit-pure-combi", sql)
         self.assertIn("manufacturer''s-manual.pdf", sql)
 

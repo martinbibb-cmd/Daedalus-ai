@@ -21,7 +21,9 @@ def candidate_id(entry: dict) -> str:
 
 
 def build_sql(entries: list[dict], created_at: str) -> str:
-    statements = ["BEGIN TRANSACTION;"]
+    # D1 bulk imports reject explicit BEGIN/COMMIT statements. Each insert is
+    # idempotent and never replaces an existing human review decision.
+    statements = []
     for entry in entries:
         filename = source_filename(entry)
         identity = candidate_id(entry)
@@ -75,7 +77,6 @@ def build_sql(entries: list[dict], created_at: str) -> str:
             + sql_string(filename)
             + ";"
         )
-    statements.append("COMMIT;")
     return "\n".join(statements) + "\n"
 
 
