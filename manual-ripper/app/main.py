@@ -1034,7 +1034,19 @@ def capture_stock_type(manual: dict[str, Any]) -> str | None:
         return "boiler"
     if "cylinder" in haystack:
         return "cylinder"
-    if "air condition" in haystack or "air-conditioning" in haystack or " ac" in f" {haystack} ":
+    if "potable water accumulator" in haystack or "cold water accumulator" in haystack:
+        return "potable_water_accumulator"
+    if "buffer vessel" in haystack or "buffer tank" in haystack:
+        return "buffer_vessel"
+    if "thermal store" in haystack:
+        return "thermal_store"
+    if "heat pump" in haystack:
+        if "outdoor unit" in haystack or "external unit" in haystack:
+            return "heat_pump_outdoor_unit"
+        if "indoor unit" in haystack or "internal unit" in haystack or "hydrobox" in haystack:
+            return "heat_pump_indoor_unit"
+        return "heat_pump"
+    if "air condition" in haystack or "air-conditioning" in haystack or re.search(r"\bac\b", haystack):
         return "ac"
     return None
 
@@ -1048,18 +1060,31 @@ def build_capture_stock_entry(manual: dict[str, Any]) -> dict[str, Any] | None:
         item.get("field"): item
         for item in evidence_for_category(manual["id"], "dimensions")
         if item.get("validation_status") == "validated"
-        and item.get("field") in {"height", "width", "depth"}
+        and item.get("field") in {"height", "width", "depth", "diameter"}
         and item.get("unit") == "mm"
         and numeric_fact_value(item) is not None
     }
-    if not {"height", "width", "depth"}.issubset(dimensions):
+    cuboid_complete = {"height", "width", "depth"}.issubset(dimensions)
+    cylinder_complete = {"height", "diameter"}.issubset(dimensions)
+    if not cuboid_complete and not cylinder_complete:
         return None
 
-    width = numeric_fact_value(dimensions["width"])
     height = numeric_fact_value(dimensions["height"])
-    depth = numeric_fact_value(dimensions["depth"])
-    if width is None or height is None or depth is None:
+    if height is None:
         return None
+    if cuboid_complete:
+        width = numeric_fact_value(dimensions["width"])
+        depth = numeric_fact_value(dimensions["depth"])
+        if width is None or depth is None:
+            return None
+        primitive = "cuboid"
+        geometry = {"cuboid": {"widthMm": width, "heightMm": height, "depthMm": depth}}
+    else:
+        diameter = numeric_fact_value(dimensions["diameter"])
+        if diameter is None:
+            return None
+        primitive = "cylinder"
+        geometry = {"cylinder": {"diameterMm": diameter, "heightMm": height}}
 
     source_pages = sorted({
         int(item["source_page"])
@@ -1076,14 +1101,8 @@ def build_capture_stock_entry(manual: dict[str, Any]) -> dict[str, Any] | None:
         "applianceType": stock_type,
         "make": manufacturer,
         "model": model,
-        "primitive": "cuboid",
-        "dimensions": {
-            "cuboid": {
-                "widthMm": width,
-                "heightMm": height,
-                "depthMm": depth,
-            }
-        },
+        "primitive": primitive,
+        "dimensions": geometry,
         "clearanceMm": None,
         "reviewStatus": "candidate",
         "reviewRequired": True,

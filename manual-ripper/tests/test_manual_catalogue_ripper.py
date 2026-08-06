@@ -150,7 +150,91 @@ class ManualCatalogueRipperTests(unittest.TestCase):
             self.assertEqual(ripper.run(root, output, report), 0)
             self.assertEqual(json.loads(output.read_text(encoding="utf-8")), [])
             report_json = json.loads(report.read_text(encoding="utf-8"))
-            self.assertIn("missing_dimensions:height,width,depth", report_json["reports"][0]["reviewReasons"])
+            self.assertIn(
+                "missing_complete_geometry:cuboid=height,width,depth;cylinder=diameter,height",
+                report_json["reports"][0]["reviewReasons"],
+            )
+
+    def test_builds_cylindrical_hot_water_cylinder_candidate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            manual = Path(tmp) / "Joule Cyclone hot water cylinder.txt"
+            manual.write_text(
+                "Joule unvented hot water cylinder. Model: Cyclone 200 Installation manual. "
+                "Overall diameter 550 mm. Overall height 1480 mm.",
+                encoding="utf-8",
+            )
+
+            entry, report = ripper.parse_manual(manual)
+
+            self.assertEqual(report["applianceType"], "cylinder")
+            self.assertEqual(entry["primitive"], "cylinder")
+            self.assertEqual(
+                entry["dimensions"],
+                {"cylinder": {"diameterMm": 550, "heightMm": 1480}},
+            )
+
+    def test_builds_heat_pump_outdoor_unit_as_cuboid(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            manual = Path(tmp) / "Daikin heat pump outdoor unit.txt"
+            manual.write_text(
+                "Daikin air source heat pump outdoor unit. Model: Altherma ERGA08 Installation manual. "
+                "Appliance dimensions H x W x D 740 mm x 884 mm x 388 mm.",
+                encoding="utf-8",
+            )
+
+            entry, _ = ripper.parse_manual(manual)
+
+            self.assertEqual(entry["applianceType"], "heat_pump_outdoor_unit")
+            self.assertEqual(entry["primitive"], "cuboid")
+
+    def test_keeps_buffer_vessel_and_potable_accumulator_distinct(self):
+        cases = (
+            ("Grant heat pump buffer vessel", "buffer_vessel"),
+            ("Kingspan potable water accumulator", "potable_water_accumulator"),
+        )
+        for description, expected_type in cases:
+            with self.subTest(expected_type=expected_type), tempfile.TemporaryDirectory() as tmp:
+                manual = Path(tmp) / f"{description}.txt"
+                make = "Grant" if expected_type == "buffer_vessel" else "Kingspan"
+                manual.write_text(
+                    f"{description}. {make}. Model: Store 100 Installation manual. "
+                    "Overall diameter 500 mm. Overall height 900 mm.",
+                    encoding="utf-8",
+                )
+
+                entry, _ = ripper.parse_manual(manual)
+
+                self.assertEqual(entry["applianceType"], expected_type)
+
+    def test_unqualified_accumulator_is_held_for_review(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            manual = Path(tmp) / "Kingspan accumulator.txt"
+            manual.write_text(
+                "Kingspan accumulator. Model: Store 100 Installation manual. "
+                "Overall diameter 500 mm. Overall height 900 mm.",
+                encoding="utf-8",
+            )
+
+            entry, report = ripper.parse_manual(manual)
+
+            self.assertIsNone(entry)
+            self.assertIn(
+                "ambiguous_accumulator_requires_potable_or_heating_context",
+                report["reviewReasons"],
+            )
+
+    def test_builds_air_conditioning_unit_candidate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            manual = Path(tmp) / "Mitsubishi Electric air conditioning unit.txt"
+            manual.write_text(
+                "Mitsubishi Electric split air conditioning unit. Model: MSZ-AP25 Installation manual. "
+                "Appliance dimensions H x W x D 299 mm x 798 mm x 219 mm.",
+                encoding="utf-8",
+            )
+
+            entry, _ = ripper.parse_manual(manual)
+
+            self.assertEqual(entry["applianceType"], "ac")
 
     def test_keeps_reviewable_dimensions_when_clearances_are_not_found(self):
         with tempfile.TemporaryDirectory() as tmp:

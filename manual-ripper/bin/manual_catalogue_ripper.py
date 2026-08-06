@@ -24,6 +24,19 @@ KNOWN_MANUFACTURERS = (
     "Glow-worm",
     "Alpha",
     "Potterton",
+    "Daikin",
+    "Mitsubishi Electric",
+    "Panasonic",
+    "Samsung",
+    "Fujitsu",
+    "LG",
+    "NIBE",
+    "Grant",
+    "Joule",
+    "Gledhill",
+    "Kingspan",
+    "Heatrae Sadia",
+    "Megaflo",
 )
 
 MANUFACTURER_CANONICAL_NAMES = {
@@ -37,6 +50,18 @@ MODEL_PATTERNS = (
     re.compile(r"\b(ecoTEC\s+[A-Za-z0-9+ .-]{2,48})\b", re.I),
     re.compile(r"\b(Logic\s+[A-Za-z0-9+ .-]{2,48})\b", re.I),
 )
+
+SUPPORTED_APPLIANCE_TYPES = {
+    "boiler",
+    "cylinder",
+    "ac",
+    "heat_pump",
+    "heat_pump_outdoor_unit",
+    "heat_pump_indoor_unit",
+    "buffer_vessel",
+    "thermal_store",
+    "potable_water_accumulator",
+}
 
 
 def identity_from_filename(filename: str) -> tuple[str | None, str | None]:
@@ -201,12 +226,50 @@ def find_model(text: str, filename: str) -> str | None:
     if filename_model:
         return filename_model
     haystack = clean_text(f"{filename}\n{text[:6000]}")
+    explicit = re.search(
+        r"\bmodel(?:\s+(?:name|number|no\.?))?\s*[:#-]\s*([A-Za-z0-9][A-Za-z0-9+./() -]{1,64})",
+        haystack,
+        re.I,
+    )
+    if explicit:
+        return title_model(explicit.group(1))
     if "greenstar_9-24_ri" in filename.lower() or "greenstar 9-24 ri" in haystack.lower():
         return "Greenstar Ri ErP+ 9-24"
     for pattern in MODEL_PATTERNS:
         match = pattern.search(haystack)
         if match:
             return title_model(match.group(1))
+    return None
+
+
+def classify_appliance_type(text: str, filename: str) -> str | None:
+    """Classify only explicit product families; never guess an ambiguous accumulator."""
+    haystack = clean_text(f"{filename}\n{text[:12000]}").lower()
+    if "preheat" in filename.lower() and "kit" in filename.lower():
+        return None
+
+    if re.search(
+        r"\b(?:potable|drinking|domestic|cold)\s+water\s+(?:booster\s+)?accumulator\b"
+        r"|\baccumulator\s+(?:vessel\s+)?for\s+(?:potable|drinking|domestic|cold)\s+water\b",
+        haystack,
+    ):
+        return "potable_water_accumulator"
+    if re.search(r"\b(?:heating|heat[- ]pump|primary)\s+buffer\s+(?:tank|vessel)\b|\bbuffer\s+(?:tank|vessel)\b", haystack):
+        return "buffer_vessel"
+    if re.search(r"\bthermal\s+store\b", haystack):
+        return "thermal_store"
+    if re.search(r"\b(?:hot\s+water|dhw|unvented|vented|indirect|direct)\s+cylinder\b", haystack):
+        return "cylinder"
+    if re.search(r"\bheat\s*pump\b", haystack):
+        if re.search(r"\b(?:outdoor|external)\s+unit\b", haystack):
+            return "heat_pump_outdoor_unit"
+        if re.search(r"\b(?:indoor|internal)\s+unit\b|\bhydrobox\b", haystack):
+            return "heat_pump_indoor_unit"
+        return "heat_pump"
+    if re.search(r"\bair[- ]?condition(?:er|ing)?\b|\bsplit\s+(?:ac|system|unit)\b", haystack):
+        return "ac"
+    if re.search(r"\bboilers?\b|\bgreenstar\b|\becotec\b|\becofit\b|\bvitodens\b", haystack) or identity_from_filename(filename)[1]:
+        return "boiler"
     return None
 
 
@@ -353,6 +416,46 @@ def extract_dimensions(text: str, source_file: str, page: int | None) -> list[Ev
     return candidates
 
 
+def extract_cylinder_dimensions(text: str, source_file: str, page: int | None) -> list[Evidence]:
+    """Extract a single explicit overall diameter and height pair."""
+    diameter_matches = list(
+        re.finditer(r"\b(?:overall\s+)?(?:diameter|dia\.?)\s*[:=-]?\s*(\d{2,4})\s*mm\b|[Øø]\s*(\d{2,4})\s*mm\b", text, re.I)
+    )
+    height_matches = list(
+        re.finditer(r"\b(?:overall\s+)?height\s*[:=-]?\s*(\d{2,4})\s*mm\b", text, re.I)
+    )
+    diameter_values = {
+        int(next(group for group in match.groups() if group is not None)) for match in diameter_matches
+    }
+    height_values = {int(match.group(1)) for match in height_matches}
+    if len(diameter_values) != 1 or len(height_values) != 1:
+        return []
+    diameter_match = diameter_matches[0]
+    height_match = height_matches[0]
+    return [
+        Evidence(
+            "diameter",
+            diameter_values.pop(),
+            "mm",
+            source_file,
+            page,
+            snippet_around(text, diameter_match.start(), diameter_match.end()),
+            "high",
+            "explicit-overall-diameter",
+        ),
+        Evidence(
+            "height",
+            height_values.pop(),
+            "mm",
+            source_file,
+            page,
+            snippet_around(text, height_match.start(), height_match.end()),
+            "high",
+            "explicit-overall-height",
+        ),
+    ]
+
+
 def extract_worcester_ri_figure_dimensions(text: str, source_file: str, page: int | None) -> list[Evidence]:
     lowered = text.lower()
     if "fig. 1" not in lowered or "appliance" not in lowered:
@@ -463,6 +566,7 @@ def parse_manual(path: Path, source_filename: str | None = None) -> tuple[dict |
             "clearanceEvidence": [],
             "reviewReasons": ["unsupported_appliance_type:preheat_kit"],
         }
+    appliance_type = classify_appliance_type(combined_text, logical_filename)
     model = find_model(combined_text, logical_filename)
     make = find_make(combined_text, logical_filename) or infer_make_from_model_family(model, combined_text)
     dimension_evidence: list[Evidence] = []
@@ -473,19 +577,27 @@ def parse_manual(path: Path, source_filename: str | None = None) -> tuple[dict |
             if page is not None:
                 ambiguous_dimension_pages.append(page)
         dimension_evidence.extend(extract_dimensions(text, logical_filename, page))
+        dimension_evidence.extend(extract_cylinder_dimensions(text, logical_filename, page))
         clearance_evidence.extend(extract_clearances(text, logical_filename, page))
 
     dimensions = first_by_field(dimension_evidence)
     clearances = first_by_field(clearance_evidence)
-    missing = [field for field in ("height", "width", "depth") if field not in dimensions]
+    cuboid_complete = all(field in dimensions for field in ("height", "width", "depth"))
+    cylinder_complete = all(field in dimensions for field in ("height", "diameter"))
+    primitive = "cuboid" if cuboid_complete else "cylinder" if cylinder_complete else None
     status = "candidate"
     review_reasons = []
+    if not appliance_type:
+        if re.search(r"\baccumulator\b", combined_text, re.I):
+            review_reasons.append("ambiguous_accumulator_requires_potable_or_heating_context")
+        else:
+            review_reasons.append("appliance_type_not_extracted")
     if not make:
         review_reasons.append("manufacturer_not_extracted")
     if not model:
         review_reasons.append("model_not_extracted")
-    if missing:
-        review_reasons.append("missing_dimensions:" + ",".join(missing))
+    if not primitive:
+        review_reasons.append("missing_complete_geometry:cuboid=height,width,depth;cylinder=diameter,height")
     if ambiguous_dimension_pages:
         review_reasons.append(
             "variant_dimensions_require_model_mapping:pages="
@@ -502,34 +614,46 @@ def parse_manual(path: Path, source_filename: str | None = None) -> tuple[dict |
         "sourceFilename": logical_filename,
         "make": make,
         "model": model,
+        "applianceType": appliance_type,
+        "primitive": primitive,
         "pagesRead": len(pages),
         "dimensionEvidence": [item.as_dict() for item in dimension_evidence],
         "clearanceEvidence": [item.as_dict() for item in clearance_evidence],
         "reviewReasons": review_reasons,
     }
-    if missing or ambiguous_dimension_pages or not make or not model:
+    if not primitive or ambiguous_dimension_pages or not make or not model or not appliance_type:
         return None, report
 
-    entry_id = f"boiler-{slugify(make)}-{slugify(model)}"
+    entry_id = f"{appliance_type}-{slugify(make)}-{slugify(model)}"
     clearance_mm = {
         "sideMm": int(clearances["sideMm"].value) if "sideMm" in clearances else None,
         "aboveMm": int(clearances["aboveMm"].value) if "aboveMm" in clearances else None,
         "belowMm": int(clearances["belowMm"].value) if "belowMm" in clearances else None,
         "frontMm": int(clearances["frontMm"].value) if "frontMm" in clearances else None,
     }
-    entry = {
-        "id": entry_id,
-        "applianceType": "boiler",
-        "make": make,
-        "model": model,
-        "primitive": "cuboid",
-        "dimensions": {
+    geometry = (
+        {
             "cuboid": {
                 "widthMm": int(dimensions["width"].value),
                 "heightMm": int(dimensions["height"].value),
                 "depthMm": int(dimensions["depth"].value),
             }
-        },
+        }
+        if primitive == "cuboid"
+        else {
+            "cylinder": {
+                "diameterMm": int(dimensions["diameter"].value),
+                "heightMm": int(dimensions["height"].value),
+            }
+        }
+    )
+    entry = {
+        "id": entry_id,
+        "applianceType": appliance_type,
+        "make": make,
+        "model": model,
+        "primitive": primitive,
+        "dimensions": geometry,
         "clearanceMm": clearance_mm,
         "manualSource": build_manual_source(logical_filename, dimensions, clearances),
         "reviewStatus": "candidate",

@@ -1029,6 +1029,15 @@ def test_capture_van_stock_catalog_exports_only_promoted_reviewed_entries(tmp_pa
     assert item == reviewed_entry
 
 
+def test_capture_stock_type_keeps_buffer_and_potable_accumulator_distinct():
+    assert main.capture_stock_type({"appliance_type": "heating buffer vessel"}) == "buffer_vessel"
+    assert (
+        main.capture_stock_type({"appliance_type": "potable water accumulator"})
+        == "potable_water_accumulator"
+    )
+    assert main.capture_stock_type({"appliance_type": "accumulator"}) is None
+
+
 def test_capture_van_stock_catalog_omits_manuals_without_validated_dimensions(tmp_path, monkeypatch):
     configure_storage(tmp_path, monkeypatch)
     seed_manual_with_visual_case_dimensions_only()
