@@ -39,6 +39,31 @@ MODEL_PATTERNS = (
 )
 
 
+def identity_from_filename(filename: str) -> tuple[str | None, str | None]:
+    """Return only product identities explicitly encoded in known upload names."""
+    lowered = filename.lower().replace("_", "-")
+    if "preheat" in lowered and "kit" in lowered:
+        return None, None
+
+    variant = next(
+        (name for token, name in (("combi", "Combi"), ("system", "System"), ("open-vent", "Open Vent"), ("regular", "Regular")) if token in lowered),
+        None,
+    )
+    if "ecofit-pure" in lowered and variant:
+        return "Vaillant", f"ecoFIT pure {variant}"
+    if "energy7" in lowered and variant:
+        return "Glow-worm", f"Energy7 {variant}"
+    if "ecotec-plus" in lowered and variant:
+        return "Vaillant", f"ecoTEC plus {variant}"
+    if "greenstar-4000" in lowered and variant:
+        return "Worcester Bosch", f"Greenstar 4000 {variant}"
+    if "worcester-8000" in lowered and variant:
+        return "Worcester Bosch", f"Greenstar 8000 {variant}"
+    if "viessmann-vitodens-050-w" in lowered:
+        return "Viessmann", "Vitodens 050-W"
+    return None, None
+
+
 @dataclass(frozen=True)
 class Evidence:
     field: str
@@ -136,6 +161,9 @@ def manufacturer_hits(haystack: str) -> list[str]:
 
 
 def find_make(text: str, filename: str) -> str | None:
+    filename_make, _ = identity_from_filename(filename)
+    if filename_make:
+        return filename_make
     filename_hits = manufacturer_hits(filename)
     if filename_hits:
         return filename_hits[0]
@@ -169,6 +197,9 @@ def title_model(value: str) -> str:
 
 
 def find_model(text: str, filename: str) -> str | None:
+    _, filename_model = identity_from_filename(filename)
+    if filename_model:
+        return filename_model
     haystack = clean_text(f"{filename}\n{text[:6000]}")
     if "greenstar_9-24_ri" in filename.lower() or "greenstar 9-24 ri" in haystack.lower():
         return "Greenstar Ri ErP+ 9-24"
@@ -191,14 +222,89 @@ def snippet_around(text: str, start: int, end: int, radius: int = 140) -> str:
     return clean_text(text[max(0, start - radius) : min(len(text), end + radius)])
 
 
+def extract_repeated_dimension_table(
+    text: str, source_file: str, page: int | None
+) -> list[Evidence] | None:
+    labels = {
+        "height": re.compile(r"(?:product|boiler)\s+dimensions?,\s*height|[■•]\s*height", re.I),
+        "width": re.compile(r"(?:product|boiler)\s+dimensions?,\s*width|[■•]\s*width", re.I),
+        "depth": re.compile(r"(?:product|boiler)\s+dimensions?,\s*depth|[■•]\s*length", re.I),
+    }
+    matches = {field: pattern.search(text) for field, pattern in labels.items()}
+    if sum(match is not None for match in matches.values()) < 2:
+        return None
+
+    evidence: list[Evidence] = []
+    all_starts = sorted(match.start() for match in matches.values() if match)
+    for field, match in matches.items():
+        if not match:
+            continue
+        later_starts = [start for start in all_starts if start > match.start()]
+        block_end = min(later_starts) if later_starts else min(len(text), match.end() + 220)
+        terminator = re.search(
+            r"\n\s*(?:net weight|weight when|mounting weight|gas connection)\b",
+            text[match.end() : block_end],
+            re.I,
+        )
+        if terminator:
+            block_end = match.end() + terminator.start()
+        block = text[match.end() : block_end]
+        values = {
+            int(value)
+            for value in re.findall(r"\b(\d{2,4})\s*(?:mm)?\b", block, re.I)
+        }
+        if len(values) != 1:
+            continue
+        value = values.pop()
+        evidence.append(
+            Evidence(
+                field,
+                value,
+                "mm",
+                source_file,
+                page,
+                snippet_around(text, match.start(), block_end),
+                "high",
+                "repeated-model-dimension-table",
+            )
+        )
+    return evidence if len(evidence) == 3 else []
+
+
 def extract_dimensions(text: str, source_file: str, page: int | None) -> list[Evidence]:
     candidates: list[Evidence] = []
     visual = extract_worcester_ri_figure_dimensions(text, source_file, page)
     if visual:
         return visual
+    repeated_table = extract_repeated_dimension_table(text, source_file, page)
+    if repeated_table is not None:
+        return repeated_table
+    if re.search(r"appliance (?:and flue outlet )?dimensions|dimensions\s*\(mm\)", text, re.I):
+        labelled: list[Evidence] = []
+        for field in ("height", "width", "depth"):
+            match = re.search(
+                rf"\bappliance\s+{field}\s*[\r\n ]+(?P<value>\d{{2,4}})\b",
+                text,
+                re.I,
+            )
+            if match:
+                labelled.append(
+                    Evidence(
+                        field,
+                        int(match.group("value")),
+                        "mm",
+                        source_file,
+                        page,
+                        snippet_around(text, match.start(), match.end()),
+                        "high",
+                        "labelled-appliance-dimension",
+                    )
+                )
+        if len(labelled) == 3:
+            return labelled
     patterns = [
         re.compile(
-            r"(?:H(?:eight)?\s*[x/]\s*W(?:idth)?\s*[x/]\s*D(?:epth)?|height\s+width\s+depth|dimensions?)"
+            r"(?:H(?:eight)?\s*[x/]\s*W(?:idth)?\s*[x/]\s*D(?:epth)?|height\s+width\s+depth)"
             r"\D{0,80}(?P<h>\d{3,4})\s*(?:mm)?\D{1,35}(?P<w>\d{3,4})\s*(?:mm)?\D{1,35}(?P<d>\d{2,4})\s*(?:mm)?",
             re.I,
         ),
@@ -280,6 +386,9 @@ def extract_clearances(text: str, source_file: str, page: int | None) -> list[Ev
     for field, pattern in rules.items():
         match = pattern.search(text)
         if match:
+            matched_text = clean_text(text[match.start() : match.end()])
+            if re.search(r"\breduced\s+by\b", matched_text, re.I):
+                continue
             evidence.append(
                 Evidence(
                     field,
@@ -343,11 +452,26 @@ def parse_manual(path: Path, source_filename: str | None = None) -> tuple[dict |
     logical_filename = source_filename or path.name
     pages = read_manual(path)
     combined_text = "\n".join(text for _, text in pages)
+    if "preheat" in logical_filename.lower() and "kit" in logical_filename.lower():
+        return None, {
+            "sourceFile": str(path),
+            "sourceFilename": logical_filename,
+            "make": find_make(combined_text, logical_filename),
+            "model": None,
+            "pagesRead": len(pages),
+            "dimensionEvidence": [],
+            "clearanceEvidence": [],
+            "reviewReasons": ["unsupported_appliance_type:preheat_kit"],
+        }
     model = find_model(combined_text, logical_filename)
     make = find_make(combined_text, logical_filename) or infer_make_from_model_family(model, combined_text)
     dimension_evidence: list[Evidence] = []
     clearance_evidence: list[Evidence] = []
+    ambiguous_dimension_pages: list[int] = []
     for page, text in pages:
+        if extract_repeated_dimension_table(text, logical_filename, page) == []:
+            if page is not None:
+                ambiguous_dimension_pages.append(page)
         dimension_evidence.extend(extract_dimensions(text, logical_filename, page))
         clearance_evidence.extend(extract_clearances(text, logical_filename, page))
 
@@ -362,11 +486,16 @@ def parse_manual(path: Path, source_filename: str | None = None) -> tuple[dict |
         review_reasons.append("model_not_extracted")
     if missing:
         review_reasons.append("missing_dimensions:" + ",".join(missing))
+    if ambiguous_dimension_pages:
+        review_reasons.append(
+            "variant_dimensions_require_model_mapping:pages="
+            + ",".join(str(page) for page in ambiguous_dimension_pages)
+        )
     missing_clearances = [
         field for field in ("sideMm", "aboveMm", "belowMm", "frontMm") if field not in clearances
     ]
     if missing_clearances:
-        review_reasons.append("missing_clearance_values")
+        review_reasons.append("missing_clearance_values:" + ",".join(missing_clearances))
 
     report = {
         "sourceFile": str(path),
@@ -378,7 +507,7 @@ def parse_manual(path: Path, source_filename: str | None = None) -> tuple[dict |
         "clearanceEvidence": [item.as_dict() for item in clearance_evidence],
         "reviewReasons": review_reasons,
     }
-    if missing or missing_clearances or not make or not model:
+    if missing or ambiguous_dimension_pages or not make or not model:
         return None, report
 
     entry_id = f"boiler-{slugify(make)}-{slugify(model)}"
@@ -404,7 +533,7 @@ def parse_manual(path: Path, source_filename: str | None = None) -> tuple[dict |
         "clearanceMm": clearance_mm,
         "manualSource": build_manual_source(logical_filename, dimensions, clearances),
         "reviewStatus": "candidate",
-        "extractionStatus": status,
+        "extractionStatus": "candidate_partial" if missing_clearances else status,
         "reviewRequired": True,
         "provenance": [item.as_dict() for item in [*dimensions.values(), *clearances.values()]],
     }

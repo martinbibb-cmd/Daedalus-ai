@@ -128,6 +128,121 @@ class ManualCatalogueRipperTests(unittest.TestCase):
             report_json = json.loads(report.read_text(encoding="utf-8"))
             self.assertIn("missing_dimensions:height,width,depth", report_json["reports"][0]["reviewReasons"])
 
+    def test_keeps_reviewable_dimensions_when_clearances_are_not_found(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manual = root / "ecofit-pure-combi-installation-and-maintenance-instructions.pdf.txt"
+            manual.write_text(
+                "Appliance dimensions H x W x D 720 mm x 440 mm x 338 mm.",
+                encoding="utf-8",
+            )
+
+            output = root / "candidates.json"
+            report = root / "report.json"
+            self.assertEqual(ripper.run(root, output, report), 0)
+
+            entries = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(len(entries), 1)
+            self.assertEqual(entries[0]["make"], "Vaillant")
+            self.assertEqual(entries[0]["model"], "ecoFIT pure Combi")
+            self.assertEqual(entries[0]["extractionStatus"], "candidate_partial")
+            self.assertEqual(
+                entries[0]["clearanceMm"],
+                {"sideMm": None, "aboveMm": None, "belowMm": None, "frontMm": None},
+            )
+
+    def test_extracts_labelled_appliance_dimension_table(self):
+        evidence = ripper.extract_dimensions(
+            """Table 3 Appliance and flue outlet dimensions
+Description
+Dimensions (mm)
+X
+Appliance width
+400
+Y
+Appliance height
+724
+Z
+Appliance depth
+310
+""",
+            "Greenstar-4000-Combi-IM.pdf",
+            9,
+        )
+
+        self.assertEqual(
+            {item.field: item.value for item in evidence},
+            {"height": 724, "width": 400, "depth": 310},
+        )
+
+    def test_extracts_repeated_variant_dimension_table_without_repeating_width(self):
+        evidence = ripper.extract_dimensions(
+            """Product dimensions, width
+390 mm
+390 mm
+390 mm
+Product dimensions, depth
+280 mm
+280 mm
+280 mm
+Product dimensions, height
+702 mm
+702 mm
+702 mm
+Net weight
+32 kg
+""",
+            "Energy7-combi.pdf",
+            9,
+        )
+
+        self.assertEqual(
+            {item.field: item.value for item in evidence},
+            {"height": 702, "width": 390, "depth": 280},
+        )
+
+    def test_rejects_family_dimension_when_variants_have_different_depths(self):
+        evidence = ripper.extract_dimensions(
+            """Boiler dimension, width
+440 mm
+440 mm
+Boiler dimension, height
+720 mm
+720 mm
+Boiler dimension, depth
+338 mm
+372 mm
+Mounting weight
+36 kg
+""",
+            "ecotec-plus-combi-and-system.pdf",
+            8,
+        )
+
+        self.assertEqual(evidence, [])
+
+    def test_does_not_treat_a_clearance_reduction_as_the_clearance(self):
+        evidence = ripper.extract_clearances(
+            "The front servicing clearance can be reduced by 150mm when other criteria are met.",
+            "Greenstar-4000-Combi.pdf",
+            18,
+        )
+
+        self.assertEqual(evidence, [])
+
+    def test_excludes_preheat_kits_from_boiler_candidates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            manual = Path(tmp) / "Greenstar-4000-Combi-Preheat-Kit-Inst-Serv.pdf.txt"
+            manual.write_text(
+                "Worcester Bosch Greenstar 4000 preheat kit. Dimensions 100 x 100 x 100 mm.",
+                encoding="utf-8",
+            )
+
+            entry, report = ripper.parse_manual(manual)
+
+            self.assertIsNone(entry)
+            self.assertEqual(report["reviewReasons"], ["unsupported_appliance_type:preheat_kit"])
+
     def test_prefers_filename_manufacturer_over_cross_brand_mentions(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
