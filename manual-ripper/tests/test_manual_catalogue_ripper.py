@@ -41,6 +41,30 @@ class ManualCatalogueRipperTests(unittest.TestCase):
         self.assertIn("manual-candidate:xeon:boiler-vaillant-ecofit-pure-combi", sql)
         self.assertIn("manufacturer''s-manual.pdf", sql)
 
+    def test_platform_candidate_import_reports_family_candidate_count_once(self):
+        entries = []
+        for diameter in (478, 580):
+            entries.append(
+                {
+                    "id": f"cylinder-mixergy-120-{diameter}mm",
+                    "applianceType": "cylinder",
+                    "make": "Mixergy",
+                    "model": f"Cylinder 120 ({diameter} mm diameter)",
+                    "primitive": "cylinder",
+                    "dimensions": {
+                        "cylinder": {"diameterMm": diameter, "heightMm": 1200}
+                    },
+                    "clearanceMm": {},
+                    "manualSource": "Mixergy Installation Guide.pdf; dimensions p5",
+                    "provenance": [],
+                }
+            )
+
+        sql = platform_sql.build_sql(entries, "2026-08-06T00:00:00+00:00")
+
+        self.assertEqual(sql.count("UPDATE manual_uploads SET status"), 1)
+        self.assertIn('"candidateCount":2', sql)
+
     def test_uses_original_filename_from_metadata_for_uuid_named_manuals(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

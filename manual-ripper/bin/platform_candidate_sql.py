@@ -24,8 +24,10 @@ def build_sql(entries: list[dict], created_at: str) -> str:
     # D1 bulk imports reject explicit BEGIN/COMMIT statements. Each insert is
     # idempotent and never replaces an existing human review decision.
     statements = []
+    candidate_counts_by_filename: dict[str, int] = {}
     for entry in entries:
         filename = source_filename(entry)
+        candidate_counts_by_filename[filename] = candidate_counts_by_filename.get(filename, 0) + 1
         identity = candidate_id(entry)
         provenance = {
             "evidenceClass": "manual_evidence",
@@ -61,10 +63,11 @@ def build_sql(entries: list[dict], created_at: str) -> str:
             + sql_string(values[11])
             + ") LIMIT 1;"
         )
+    for filename, candidate_count in candidate_counts_by_filename.items():
         report = json.dumps(
             {
                 "extractor": "xeon_manual_ripper_batch_v2",
-                "candidateCount": 1,
+                "candidateCount": candidate_count,
                 "notes": "Measurements extracted from the uploaded manual and waiting for review.",
             },
             sort_keys=True,
