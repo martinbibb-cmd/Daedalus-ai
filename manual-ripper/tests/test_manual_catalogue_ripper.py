@@ -1,7 +1,11 @@
 import json
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
+
+import fitz
 
 import sys
 
@@ -12,6 +16,26 @@ import promote_reviewed_catalogue as promoter
 
 
 class ManualCatalogueRipperTests(unittest.TestCase):
+    def test_reads_pdf_with_existing_pymupdf_when_pdftotext_is_absent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            manual = Path(tmp) / "manual.pdf"
+            with fitz.open() as document:
+                page = document.new_page()
+                page.insert_text((72, 72), "Appliance dimensions H x W x D 600 mm x 390 mm x 270 mm")
+                document.save(manual)
+
+            real_which = shutil.which
+            with mock.patch.object(
+                ripper.shutil,
+                "which",
+                side_effect=lambda command: None if command == "pdftotext" else real_which(command),
+            ):
+                pages = ripper.read_pdf_file(manual)
+
+            self.assertEqual(len(pages), 1)
+            self.assertEqual(pages[0][0], 1)
+            self.assertIn("600 mm x 390 mm x 270 mm", pages[0][1])
+
     def test_builds_candidate_with_dimensions_clearances_and_provenance(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

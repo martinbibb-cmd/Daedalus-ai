@@ -20,6 +20,11 @@ def configure_storage(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "FACTS_DIR", root / "facts")
     monkeypatch.setattr(main, "INDEXES_DIR", root / "indexes")
     monkeypatch.setattr(main, "ASSETS_DIR", root / "assets")
+    monkeypatch.setattr(
+        main,
+        "REVIEWED_CATALOGUE_PATH",
+        root / "reviewed" / "manual-derived-van-stock.json",
+    )
     monkeypatch.setattr(main, "REGRESSIONS_DIR", root / "regressions")
     monkeypatch.setattr(main, "DB_PATH", root / "metadata.sqlite")
     main.ensure_storage()
@@ -961,10 +966,40 @@ def test_max_flue_length_with_90_elbows_uses_flue_facts_not_clearance_table(tmp_
     assert "Best matching manual text" not in body["answer"]
 
 
-def test_capture_van_stock_catalog_exports_validated_manual_dimensions(tmp_path, monkeypatch):
+def test_capture_van_stock_catalog_exports_only_promoted_reviewed_entries(tmp_path, monkeypatch):
     configure_storage(tmp_path, monkeypatch)
     manual_id = seed_manual("greenstar-ri")
     client = TestClient(main.app)
+
+    # Extracted evidence alone must never appear as selectable Van Stock.
+    assert client.get("/manuals/van-stock-catalog.json").json() == []
+
+    reviewed_entry = {
+        "id": "boiler-worcester-greenstar-ri-erp",
+        "applianceType": "boiler",
+        "make": "Worcester",
+        "model": "Greenstar Ri ErP",
+        "primitive": "cuboid",
+        "dimensions": {
+            "cuboid": {
+                "widthMm": 390.0,
+                "heightMm": 600.0,
+                "depthMm": 270.0,
+            }
+        },
+        "clearanceMm": {
+            "sideMm": 5,
+            "aboveMm": 170,
+            "belowMm": 200,
+            "frontMm": 600,
+        },
+        "manualSource": f"manual-ripper:{manual_id}:pages:12",
+    }
+    main.REVIEWED_CATALOGUE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    main.REVIEWED_CATALOGUE_PATH.write_text(
+        json.dumps([reviewed_entry]),
+        encoding="utf-8",
+    )
 
     response = client.get("/manuals/van-stock-catalog.json")
 
@@ -991,10 +1026,7 @@ def test_capture_van_stock_catalog_exports_validated_manual_dimensions(tmp_path,
         "frontMm": 600,
     }
     assert item["manualSource"] == f"manual-ripper:{manual_id}:pages:12"
-    assert item["manualProvenance"]["manualId"] == manual_id
-    assert item["manualProvenance"]["status"] == "manual-derived"
-    assert {fact["field"] for fact in item["manualProvenance"]["facts"]} == {"height", "width", "depth"}
-    assert all(fact["validationStatus"] == "validated" for fact in item["manualProvenance"]["facts"])
+    assert item == reviewed_entry
 
 
 def test_capture_van_stock_catalog_omits_manuals_without_validated_dimensions(tmp_path, monkeypatch):

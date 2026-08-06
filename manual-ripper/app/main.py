@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 
-APP_VERSION = "manual-ripper-0.4-guide"
+APP_VERSION = "manual-ripper-0.5-van-stock-review-gate"
 EVIDENCE_SCHEMA_VERSION = "evidence-store-v3"
 MISSING_EXACT_FACT_ANSWER = "I don’t have that exact fact extracted yet."
 DIRECT_FACT_INTENTS = {
@@ -43,6 +43,12 @@ EXTRACTED_DIR = Path(os.getenv("MANUAL_RIPPER_EXTRACTED_DIR", str(STORAGE_ROOT /
 FACTS_DIR = Path(os.getenv("MANUAL_RIPPER_FACTS_DIR", str(STORAGE_ROOT / "facts")))
 INDEXES_DIR = Path(os.getenv("MANUAL_RIPPER_INDEXES_DIR", str(STORAGE_ROOT / "indexes")))
 ASSETS_DIR = Path(os.getenv("MANUAL_RIPPER_ASSETS_DIR", str(STORAGE_ROOT / "assets")))
+REVIEWED_CATALOGUE_PATH = Path(
+    os.getenv(
+        "MANUAL_RIPPER_REVIEWED_CATALOGUE_PATH",
+        str(STORAGE_ROOT / "reviewed" / "manual-derived-van-stock.json"),
+    )
+)
 REGRESSIONS_DIR = Path(os.getenv("AI_REGRESSIONS_DIR", str(AI_SUPPORT_ROOT / "regressions")))
 DB_PATH = Path(os.getenv("MANUAL_RIPPER_DB_PATH", str(STORAGE_ROOT / "metadata.sqlite")))
 VISUAL_ZOOM = float(os.getenv("MANUAL_RIPPER_RENDER_ZOOM", "1.7"))
@@ -121,7 +127,15 @@ def db() -> Any:
 
 
 def ensure_storage() -> None:
-    for path in (ORIGINALS_DIR, EXTRACTED_DIR, FACTS_DIR, INDEXES_DIR, ASSETS_DIR, REGRESSIONS_DIR):
+    for path in (
+        ORIGINALS_DIR,
+        EXTRACTED_DIR,
+        FACTS_DIR,
+        INDEXES_DIR,
+        ASSETS_DIR,
+        REVIEWED_CATALOGUE_PATH.parent,
+        REGRESSIONS_DIR,
+    ):
         path.mkdir(parents=True, exist_ok=True)
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(DB_PATH) as conn:
@@ -1025,17 +1039,6 @@ def capture_stock_type(manual: dict[str, Any]) -> str | None:
     return None
 
 
-def capture_stock_clearance_defaults(stock_type: str) -> dict[str, float] | None:
-    if stock_type == "boiler":
-        return {
-            "sideMm": 5,
-            "aboveMm": 170,
-            "belowMm": 200,
-            "frontMm": 600,
-        }
-    return None
-
-
 def build_capture_stock_entry(manual: dict[str, Any]) -> dict[str, Any] | None:
     stock_type = capture_stock_type(manual)
     if not stock_type:
@@ -1081,7 +1084,9 @@ def build_capture_stock_entry(manual: dict[str, Any]) -> dict[str, Any] | None:
                 "depthMm": depth,
             }
         },
-        "clearanceMm": capture_stock_clearance_defaults(stock_type),
+        "clearanceMm": None,
+        "reviewStatus": "candidate",
+        "reviewRequired": True,
         "manualSource": f"manual-ripper:{manual['id']}:pages:{source_page_label}",
         "manualProvenance": {
             "manualId": manual["id"],
@@ -1100,23 +1105,23 @@ def build_capture_stock_entry(manual: dict[str, Any]) -> dict[str, Any] | None:
                 }
                 for field, item in sorted(dimensions.items())
             ],
-            "status": "manual-derived",
+            "status": "candidate",
         },
     }
     return entry
 
 
 def build_capture_van_stock_catalog() -> list[dict[str, Any]]:
-    with db() as conn:
-        rows = conn.execute(
-            "SELECT * FROM manuals WHERE notes IS NULL ORDER BY manufacturer, model, filename"
-        ).fetchall()
-    entries = [
-        entry
-        for row in rows
-        if (entry := build_capture_stock_entry(row_to_manual(row))) is not None
-    ]
-    return entries
+    """Return only the separately reviewed and promoted Van Stock catalogue."""
+    if not REVIEWED_CATALOGUE_PATH.exists():
+        return []
+    try:
+        catalogue = json.loads(REVIEWED_CATALOGUE_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(catalogue, list):
+        return []
+    return [entry for entry in catalogue if isinstance(entry, dict)]
 
 
 def candidate_page_numbers(evidence: list[dict[str, Any]]) -> list[int]:

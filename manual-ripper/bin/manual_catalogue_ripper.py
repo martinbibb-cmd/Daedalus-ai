@@ -82,17 +82,33 @@ def read_text_file(path: Path) -> list[tuple[int | None, str]]:
 
 def read_pdf_file(path: Path) -> list[tuple[int | None, str]]:
     pdftotext = shutil.which("pdftotext")
-    if not pdftotext:
-        raise RuntimeError("pdftotext is not installed; install poppler-utils to parse PDFs")
-    result = subprocess.run(
-        [pdftotext, "-layout", "-f", "1", "-l", "9999", str(path), "-"],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    # pdftotext separates pages with form-feed characters.
-    pages = result.stdout.split("\f")
-    return [(index + 1, page) for index, page in enumerate(pages) if page.strip()]
+    if pdftotext:
+        result = subprocess.run(
+            [pdftotext, "-layout", "-f", "1", "-l", "9999", str(path), "-"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        # pdftotext separates pages with form-feed characters.
+        pages = result.stdout.split("\f")
+        return [(index + 1, page) for index, page in enumerate(pages) if page.strip()]
+
+    # The deployed manual-ripper already depends on PyMuPDF for its private API.
+    # Reuse that deterministic reader when the optional poppler CLI is absent.
+    # This keeps the batch lane operational without installing another package.
+    try:
+        import fitz
+    except ImportError as exc:
+        raise RuntimeError(
+            "PDF extraction requires either pdftotext or the deployed PyMuPDF dependency"
+        ) from exc
+
+    with fitz.open(path) as document:
+        return [
+            (index + 1, text)
+            for index, page in enumerate(document)
+            if (text := page.get_text("text", sort=True)).strip()
+        ]
 
 
 def read_manual(path: Path) -> list[tuple[int | None, str]]:
