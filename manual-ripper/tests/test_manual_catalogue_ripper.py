@@ -173,6 +173,47 @@ class ManualCatalogueRipperTests(unittest.TestCase):
                 {"cylinder": {"diameterMm": 550, "heightMm": 1480}},
             )
 
+    def test_extracts_each_explicit_mixergy_cylinder_table_variant(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manual = root / "190430 MDC0001 Mixergy Installation Guide V013.txt"
+            manual.write_text(
+                """Mixergy Ltd
+For stainless steel hot water cylinders
+Model specifications
+Cylinder 90 120 150 180 210 300 model
+Nominal 478 478 580 478 580 478 580 478 580 580 dia. (mm)
+Cylinder height 1141 1329 1050 1517 1236 1767 1418 2081 1608 2125 (mm)
+""",
+                encoding="utf-8",
+            )
+            output = root / "candidates.json"
+            report = root / "report.json"
+
+            self.assertEqual(ripper.run(root, output, report), 0)
+
+            entries = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(len(entries), 10)
+            self.assertTrue(all(entry["make"] == "Mixergy" for entry in entries))
+            self.assertTrue(all(entry["applianceType"] == "cylinder" for entry in entries))
+            by_id = {entry["id"]: entry for entry in entries}
+            self.assertEqual(
+                by_id["cylinder-mixergy-90-478mm"]["dimensions"],
+                {"cylinder": {"diameterMm": 478, "heightMm": 1141}},
+            )
+            self.assertEqual(
+                by_id["cylinder-mixergy-300-580mm"]["dimensions"],
+                {"cylinder": {"diameterMm": 580, "heightMm": 2125}},
+            )
+
+    def test_classifies_mixergy_cylinder_before_compatible_heat_source_mentions(self):
+        text = (
+            "Mixergy stainless steel hot water cylinders. "
+            "The cylinder can use a boiler or heat pump as its heat source."
+        )
+
+        self.assertEqual(ripper.classify_appliance_type(text, "Mixergy.pdf"), "cylinder")
+
     def test_builds_heat_pump_outdoor_unit_as_cuboid(self):
         with tempfile.TemporaryDirectory() as tmp:
             manual = Path(tmp) / "Daikin heat pump outdoor unit.txt"

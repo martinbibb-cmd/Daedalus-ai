@@ -37,6 +37,7 @@ KNOWN_MANUFACTURERS = (
     "Kingspan",
     "Heatrae Sadia",
     "Megaflo",
+    "Mixergy",
 )
 
 MANUFACTURER_CANONICAL_NAMES = {
@@ -258,7 +259,10 @@ def classify_appliance_type(text: str, filename: str) -> str | None:
         return "buffer_vessel"
     if re.search(r"\bthermal\s+store\b", haystack):
         return "thermal_store"
-    if re.search(r"\b(?:hot\s+water|dhw|unvented|vented|indirect|direct)\s+cylinder\b", haystack):
+    if re.search(
+        r"\b(?:hot\s+water|dhw|unvented|vented|indirect|direct)\s+(?:storage\s+)?cylinders?\b",
+        haystack,
+    ):
         return "cylinder"
     if re.search(r"\bheat\s*pump\b", haystack):
         if re.search(r"\b(?:outdoor|external)\s+unit\b", haystack):
@@ -551,6 +555,140 @@ def build_manual_source(source_file: str, dimensions: dict[str, Evidence], clear
     return f"{source_file}; " + "; ".join(pages) if pages else source_file
 
 
+def extract_mixergy_cylinder_variants(
+    pages: list[tuple[int | None, str]], source_filename: str
+) -> list[dict]:
+    """Extract each explicit Mixergy capacity/diameter/height table column.
+
+    Mixergy's model table has one geometry for the smallest and largest
+    capacities and two diameter variants for each intermediate capacity.  The
+    PDF text layer preserves the three ordered rows but not their visual column
+    boundaries, so the mapping is accepted only when all rows have the complete
+    2n-2 shape described by the table.
+    """
+    identifies_mixergy = "mixergy" in source_filename.lower() or any(
+        "mixergy" in text.lower() for _, text in pages[:4]
+    )
+    if not identifies_mixergy:
+        return []
+    for page, text in pages:
+        if "model specifications" not in text.lower():
+            continue
+        model_match = re.search(
+            r"Cylinder\s+((?:\d{2,3}\s+){5}\d{2,3})\s+model",
+            text,
+            re.I,
+        )
+        diameter_match = re.search(
+            r"Nominal\s+((?:\d{3,4}\s+){5,14}\d{3,4})\s*dia\.\s*\(mm\)",
+            text,
+            re.I,
+        )
+        height_match = re.search(
+            r"Cylinder\s+height\s+((?:\d{3,4}\s+){5,14}\d{3,4})\s*\(mm\)",
+            text,
+            re.I,
+        )
+        if not model_match or not diameter_match or not height_match:
+            continue
+
+        capacities = [int(value) for value in re.findall(r"\d+", model_match.group(1))]
+        diameters = [int(value) for value in re.findall(r"\d+", diameter_match.group(1))]
+        heights = [int(value) for value in re.findall(r"\d+", height_match.group(1))]
+        expected_variants = len(capacities) * 2 - 2
+        if len(capacities) < 2 or len(diameters) != expected_variants or len(heights) != expected_variants:
+            continue
+
+        variant_capacities = [capacities[0]]
+        for capacity in capacities[1:-1]:
+            variant_capacities.extend((capacity, capacity))
+        variant_capacities.append(capacities[-1])
+        table_snippet = clean_text(text[model_match.start() : height_match.end()])
+        entries = []
+        for capacity, diameter, height in zip(variant_capacities, diameters, heights, strict=True):
+            model = f"Cylinder {capacity} ({diameter} mm diameter)"
+            evidence = [
+                Evidence(
+                    "diameter",
+                    diameter,
+                    "mm",
+                    source_filename,
+                    page,
+                    table_snippet,
+                    "high",
+                    "mixergy-model-specifications-table",
+                ),
+                Evidence(
+                    "height",
+                    height,
+                    "mm",
+                    source_filename,
+                    page,
+                    table_snippet,
+                    "high",
+                    "mixergy-model-specifications-table",
+                ),
+            ]
+            entries.append(
+                {
+                    "id": f"cylinder-mixergy-{capacity}-{diameter}mm",
+                    "applianceType": "cylinder",
+                    "make": "Mixergy",
+                    "model": model,
+                    "primitive": "cylinder",
+                    "dimensions": {
+                        "cylinder": {"diameterMm": diameter, "heightMm": height}
+                    },
+                    "clearanceMm": {
+                        "sideMm": None,
+                        "aboveMm": None,
+                        "belowMm": None,
+                        "frontMm": None,
+                    },
+                    "manualSource": f"{source_filename}; dimensions p{page}",
+                    "reviewStatus": "candidate",
+                    "extractionStatus": "candidate_partial",
+                    "reviewRequired": True,
+                    "provenance": [item.as_dict() for item in evidence],
+                }
+            )
+        return entries
+    return []
+
+
+def parse_manual_candidates(
+    path: Path, source_filename: str | None = None
+) -> tuple[list[dict], dict]:
+    logical_filename = source_filename or path.name
+    pages = read_manual(path)
+    mixergy_entries = extract_mixergy_cylinder_variants(pages, logical_filename)
+    if mixergy_entries:
+        dimension_evidence = [
+            item
+            for entry in mixergy_entries
+            for item in entry["provenance"]
+        ]
+        return mixergy_entries, {
+            "sourceFile": str(path),
+            "sourceFilename": logical_filename,
+            "make": "Mixergy",
+            "model": "Model specifications table",
+            "applianceType": "cylinder",
+            "primitive": "cylinder",
+            "pagesRead": len(pages),
+            "candidateCount": len(mixergy_entries),
+            "dimensionEvidence": dimension_evidence,
+            "clearanceEvidence": [],
+            "reviewReasons": [
+                "multiple_explicit_model_variants_require_review",
+                "missing_clearance_values:sideMm,aboveMm,belowMm,frontMm",
+            ],
+        }
+
+    entry, report = parse_manual(path, source_filename)
+    return ([entry] if entry else []), report
+
+
 def parse_manual(path: Path, source_filename: str | None = None) -> tuple[dict | None, dict]:
     logical_filename = source_filename or path.name
     pages = read_manual(path)
@@ -718,10 +856,11 @@ def run(
     source_filenames = load_source_filename_map(metadata_db)
     for manual in discover_manuals(input_dir):
         try:
-            entry, report = parse_manual(manual, source_filenames.get(manual.stem))
+            manual_entries, report = parse_manual_candidates(
+                manual, source_filenames.get(manual.stem)
+            )
             reports.append(report)
-            if entry:
-                entries.append(entry)
+            entries.extend(manual_entries)
         except Exception as exc:  # noqa: BLE001 - report per-file extraction failure.
             errors.append({"sourceFile": str(manual), "error": str(exc)})
     entries, duplicate_ids = deduplicate_entries(entries)
