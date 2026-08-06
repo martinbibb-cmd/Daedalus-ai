@@ -13,10 +13,32 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "bin"))
 
 import manual_catalogue_ripper as ripper
+import platform_candidate_sql as platform_sql
 import promote_reviewed_catalogue as promoter
 
 
 class ManualCatalogueRipperTests(unittest.TestCase):
+    def test_platform_candidate_import_preserves_existing_review_decisions(self):
+        entry = {
+            "id": "boiler-vaillant-ecofit-pure-combi",
+            "applianceType": "boiler",
+            "make": "Vaillant",
+            "model": "ecoFIT pure Combi",
+            "primitive": "cuboid",
+            "dimensions": {"cuboid": {"widthMm": 390, "heightMm": 702, "depthMm": 295}},
+            "clearanceMm": {"sideMm": None, "aboveMm": None, "belowMm": None, "frontMm": None},
+            "manualSource": "manufacturer's-manual.pdf; dimensions p7",
+            "provenance": [{"field": "width", "value": 390}],
+        }
+
+        sql = platform_sql.build_sql([entry], "2026-08-06T00:00:00+00:00")
+
+        self.assertIn("INSERT INTO manual_catalogue_candidates", sql)
+        self.assertNotIn("INSERT OR REPLACE", sql)
+        self.assertIn("AND NOT EXISTS", sql)
+        self.assertIn("manual-candidate:xeon:boiler-vaillant-ecofit-pure-combi", sql)
+        self.assertIn("manufacturer''s-manual.pdf", sql)
+
     def test_uses_original_filename_from_metadata_for_uuid_named_manuals(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
