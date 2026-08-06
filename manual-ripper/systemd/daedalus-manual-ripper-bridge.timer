@@ -1,0 +1,12 @@
+[Unit]
+Description=Poll Daedalus Platform for queued manuals
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=2min
+RandomizedDelaySec=20s
+Persistent=true
+Unit=daedalus-manual-ripper-bridge.service
+
+[Install]
+WantedBy=timers.target
